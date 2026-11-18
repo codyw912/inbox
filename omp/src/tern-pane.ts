@@ -5,6 +5,7 @@ import type { Run } from '../../hooks/gh'
 import type { ReplyHost } from './tern-replies'
 import type { OmpState } from './state'
 import { decisionView, sendReplies } from './tern-replies'
+import type { TernPalette, WatchTheme } from './tern-theme'
 import { serveDecisions } from './tern-server'
 
 type TernContext = OmpContext & { mode: string; ui: { notify(message: string, type: 'warning'): void } }
@@ -29,13 +30,41 @@ export function ternPane(
   cwd: string,
   host: ReplyHost,
   notify: (message: string) => void,
+  watchTheme?: WatchTheme,
 ) {
   let page: ReturnType<typeof serveDecisions> | undefined
   let opening: Promise<void> | undefined
+  const lifetime = new AbortController()
   let stopped = false
   let tried = false
   let focusRequested = false
   let latest: OmpState | undefined
+
+  let theme: TernPalette | undefined
+  let subscription: Awaited<ReturnType<WatchTheme>> | undefined
+  let observing: Promise<void> | undefined
+  function observe() {
+    if (!watchTheme || observing) return
+    observing = watchTheme(
+      next => {
+        if (stopped) return
+        theme = next
+        page?.update()
+      },
+      run,
+      cwd,
+    )
+      .then(sub => {
+        if (stopped) sub.stop()
+        else subscription = sub
+      })
+      .catch(() => {})
+  }
+  async function focusBlock(id: number) {
+    if (stopped) throw new Error('This omp session has ended.')
+    const result = await run(['tern', 'focus', String(id)], { cwd, timeoutMs: 5000 })
+    if (result.code !== 0) throw new Error('Tern could not switch panes.')
+  }
 
   async function browser(op: Record<string, unknown>) {
     const response = await run(['tern', 'browser', JSON.stringify(op), '--timeout', '12'], { cwd, timeoutMs: 14000 })
@@ -65,20 +94,23 @@ export function ternPane(
 
   async function launch() {
     const state = latest ?? (await host.read())
+    observe()
+    await observing
     if (stopped) return
     page ??= serveDecisions(
-      () => decisionView(latest ?? state),
+      () => ({ ...decisionView(latest ?? state), theme }),
       replies => {
         if (stopped) throw new Error('This omp session has ended.')
         return sendReplies(host, replies)
       },
+      () => focusBlock(target.owner),
+      () => subscription?.refresh(),
     )
     const { url } = page
     const found = await existing(url)
     if (stopped) return
     if (found !== undefined) {
-      const result = await run(['tern', 'focus', String(found)], { cwd, timeoutMs: 5000 })
-      if (result.code !== 0) throw new Error('Tern could not focus the inbox. Retry /inbox.')
+      if (focusRequested) await focusBlock(found)
       return
     }
     const previous = focusRequested ? undefined : await focused().catch(() => undefined)
@@ -107,6 +139,12 @@ export function ternPane(
 
   return {
     open,
+    async keyboard() {
+      await open(false)
+      if (stopped || !page) throw new Error('The omp session changed.')
+      await page.keyboard.connected()
+      return { request: page.keyboard.request, signal: lifetime.signal }
+    },
     saved(state: OmpState) {
       if (stopped) return
       latest = state
@@ -118,6 +156,8 @@ export function ternPane(
     },
     stop() {
       stopped = true
+      lifetime.abort()
+      subscription?.stop()
       if (!page) return
       const { url } = page
       page.stop()
@@ -129,7 +169,12 @@ export function ternPane(
 }
 
 /** Install and revoke the page's access as omp moves between sessions in this terminal. */
-export function ternSessions(target: ReturnType<typeof ternTarget> | undefined, run: Run, sessions: SessionCalls) {
+export function ternSessions(
+  target: ReturnType<typeof ternTarget> | undefined,
+  run: Run,
+  sessions: SessionCalls,
+  watchTheme?: WatchTheme,
+) {
   let active: { id: string; panel: ReturnType<typeof ternPane>; sawSave: boolean } | undefined
   return {
     start(ctx: TernContext) {
@@ -150,6 +195,7 @@ export function ternSessions(target: ReturnType<typeof ternTarget> | undefined, 
               : Promise.resolve({ state: 'rejected', reason: 'The omp session changed.' }),
         },
         message => ctx.ui.notify(message, 'warning'),
+        watchTheme,
       )
       active = { id, panel, sawSave: false }
       void host
@@ -163,6 +209,10 @@ export function ternSessions(target: ReturnType<typeof ternTarget> | undefined, 
       if (active?.id !== id) return
       active.sawSave = true
       active.panel.saved(state)
+    },
+    async keyboard(ctx: TernContext) {
+      if (ctx.mode !== 'tui' || active?.id !== sessionIdOf(ctx)) return
+      return active.panel.keyboard()
     },
     async open(ctx: TernContext) {
       if (ctx.mode !== 'tui' || active?.id !== sessionIdOf(ctx)) return false

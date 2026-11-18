@@ -15,7 +15,7 @@ import { RESUME_TEXT } from '../../hooks/banners'
 import type { Holds } from '../../hooks/timing'
 import type { ShownTab } from '../../hooks/tabs'
 import type { PanelSource } from './controller'
-import type { PanelScreen } from './panel'
+import { bandLines, type PanelScreen, type Style } from './panel'
 import { readState } from './state'
 import { sessionIdOf } from './host-context'
 import { withCollapse } from '../../hooks/collapse'
@@ -160,4 +160,36 @@ export function panelCalls(context: HostContext, sessions: SessionCalls, herdrAs
   })
 
   return { inbox, liveSource }
+}
+
+export function bandWidget(
+  ctx: OmpContext,
+  inbox: Inbox,
+  tui: { requestRender(): void },
+  style: Style,
+  now: () => number,
+  shortcut?: string,
+) {
+  let screen: PanelScreen | null = null
+  const refresh = () =>
+    inbox
+      .screen(ctx)
+      .then(next => {
+        screen = next
+        tui.requestRender()
+      })
+      .catch(() => {
+        if (screen && !screen.isReadFailed) {
+          screen = { ...screen, isReadFailed: true }
+          tui.requestRender()
+        }
+      })
+  void refresh()
+  const stop = inbox.onChange(ctx, () => void refresh())
+
+  return {
+    render: (width: number) => (screen ? bandLines(screen, width, now(), style, shortcut) : []),
+    invalidate: () => {},
+    dispose: stop,
+  }
 }

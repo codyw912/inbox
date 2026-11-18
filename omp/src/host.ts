@@ -29,14 +29,14 @@ import { INBOX_COMMAND_TEXT } from '../../hooks/tabs'
 import { copyToClipboard } from './commands'
 import { createPanel } from './controller'
 import { demoSource } from './demo'
-import { bandLines } from './panel'
-import type { PanelScreen } from './panel'
 import { wrapText } from './panel-text'
 import { styleOf } from './theme'
 import type { OmpState } from './state'
 import { useQuestionHistory } from './state'
 import { questionHistoryPlace } from './question-history'
 import type { HistoryPlace } from '../../hooks/history-store'
+import { inboxKeyboard } from './tern-control'
+import { watchTernTheme, type WatchTheme } from './tern-theme'
 import { ternSessions, ternTarget } from './tern-pane'
 import { OMP, TOOL_LABELS } from './texts'
 import { activityHandlers } from './host-activity'
@@ -44,7 +44,7 @@ import { isUnattended, sessionIdOf } from './host-context'
 import type { HostContext } from './host-context'
 import { herdrLog, ompPresses, startOmpInHerdrApp } from './host-presses'
 import { ompHerdrAsk } from './host-herdr-ask'
-import { panelCalls } from './host-panel'
+import { bandWidget, panelCalls } from './host-panel'
 import type { Inbox } from './host-panel'
 import { sessionCalls } from './host-sessions'
 import { MESSAGE_TYPE, turnHandlers } from './host-turns'
@@ -84,8 +84,9 @@ export type HostDeps = {
   isUsageLimit: (status: number | undefined, message: string) => Promise<boolean>
   /** The Herdr pane or app terminal omp runs in, from `herdrTarget`, or null outside Herdr. */
   herdrTarget: HerdrTarget | null
-  /** The question history for the sessions saved in `dir`. A host without one saves no history. */
   tern?: ReturnType<typeof ternTarget>
+  watchTheme?: WatchTheme
+  /** The question history for the sessions saved in `dir`. A host without one saves no history. */
   questionHistory?: (dir: string) => HistoryPlace | null
 }
 
@@ -120,6 +121,15 @@ const defaultDeps: HostDeps = {
   isUsageLimit: isUsageLimitOutcome,
   herdrTarget: herdrTarget(process.env),
   tern: ternTarget(process.env),
+  watchTheme: async (publish, run, cwd) =>
+    watchTernTheme(
+      publish,
+      run,
+      cwd,
+      await import('@oh-my-pi/pi-tui/theme'),
+      await import('@oh-my-pi/pi-tui/theme/loader'),
+      await import('@oh-my-pi/pi-tui/theme/color'),
+    ),
   questionHistory: dir => questionHistoryPlace(process.env, dir),
 }
 
@@ -134,14 +144,7 @@ function byNewestRevision(a: Model, b: Model): number {
   return differing === -1 ? 0 : (y[differing] ?? 0) - (x[differing] ?? 0)
 }
 
-/**
- * The inbox model: the person's `@inbox` role when it names a model omp can use. omp's `resolve` returns nothing for
- * an unset role, an unknown model or one with no sign-in, and the inbox then falls through. A model that resolves
- * but fails when called fails that update like any other.
- * Next the newest Sonnet model the person's providers offer, since the inbox model evals pass on Sonnet.
- * omp's model lists also hold retired Sonnets, which no longer answer. The `anthropic` provider is preferred.
- * Otherwise omp's `@smol` role.
- */
+/** Prefer the person's @inbox role, then the newest available Sonnet (Anthropic first), then @smol. */
 function inboxModel(ctx: ExtensionContext): Model | null {
   const sonnets = ctx.models
     .list()
@@ -300,7 +303,33 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
   const sessions = sessionCalls(context)
   const { change } = sessions
   const turns = turnHandlers(context, sessions)
-  const tern = ternSessions(deps.tern, run, sessions)
+  const tern = ternSessions(deps.tern, run, sessions, deps.watchTheme)
+  if (deps.tern)
+    pi.registerShortcut('ctrl+alt+i', {
+      description: 'Answer inbox questions from the composer',
+      handler: async ctx => {
+        try {
+          const page = await tern.keyboard(ctx)
+          if (!page) return
+          const { Editor, parseKey, truncateToWidth } = await import('@oh-my-pi/pi-tui')
+          const { getEditorTheme } = await import('@oh-my-pi/pi-tui/theme')
+          await ctx.ui.custom(
+            (tui, _theme, _keys, done) =>
+              inboxKeyboard(
+                page,
+                () => tui.requestRender(),
+                () => done(null),
+                parseKey,
+                () => new Editor(getEditorTheme()),
+                truncateToWidth,
+              ),
+            { signal: page.signal },
+          )
+        } catch (error) {
+          ctx.ui.notify(messageOf(error), 'warning')
+        }
+      },
+    })
   context.saved = tern.saved
   const start = (ctx: ExtensionContext, parentFile?: string) => {
     tern.start(ctx)
@@ -392,28 +421,7 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
       BAND_KEY,
       (tui, theme) => {
         const style = styleOf(theme)
-        let screen: PanelScreen | null = null
-        const refresh = () =>
-          inbox
-            .screen(ctx)
-            .then(next => {
-              screen = next
-              tui.requestRender()
-            })
-            .catch(() => {
-              if (screen && !screen.isReadFailed) {
-                screen = { ...screen, isReadFailed: true }
-                tui.requestRender()
-              }
-            })
-        void refresh()
-        const stop = inbox.onChange(ctx, () => void refresh())
-
-        return {
-          render: width => (screen ? bandLines(screen, width, deps.now(), style) : []),
-          invalidate: () => {},
-          dispose: stop,
-        }
+        return bandWidget(ctx, inbox, tui, style, deps.now, deps.tern ? 'Ctrl+Alt+I to answer ' : undefined)
       },
       { placement: 'aboveEditor' },
     )

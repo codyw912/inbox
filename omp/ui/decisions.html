@@ -5,196 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Inbox · omp</title>
     <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #faf9f6;
-        --fg: #212622;
-        --soft: #646c65;
-        --line: #d2d6ce;
-        --card: #fff;
-        --accent: #216449;
-        --wash: #edf4ef;
-        font:
-          15px/1.45 'Instrument Sans',
-          ui-sans-serif,
-          system-ui,
-          sans-serif;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #191d1b;
-          --fg: #ebefe9;
-          --soft: #a2aca4;
-          --card: #232925;
-          --line: #424c45;
-          --accent: #a2dcc0;
-          --wash: #273c30;
-        }
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-        margin: 0;
-        background: var(--bg);
-        color: var(--fg);
-      }
-      main,
-      footer > div {
-        max-width: 48rem;
-        margin: auto;
-        padding: 1.3rem;
-      }
-      main {
-        width: 100%;
-        padding-bottom: 2rem;
-      }
-      header {
-        border-bottom: 1px solid var(--line);
-        padding-bottom: 0.85rem;
-      }
-      h1 {
-        font:
-          600 clamp(1.65rem, 6vw, 2.25rem)/1.15 Georgia,
-          serif;
-        margin: 0;
-      }
-      h2 {
-        font-weight: 600;
-        font-size: 1.05rem;
-        line-height: 1.4;
-        margin: 0;
-      }
-      p {
-        margin: 0.35rem 0;
-        color: var(--soft);
-      }
-      #focus:empty,
-      #notice:empty {
-        display: none;
-      }
-      article {
-        margin: 1.2rem 0;
-        border-bottom: 1px solid var(--line);
-        padding-bottom: 1rem;
-      }
-      fieldset {
-        padding: 0;
-        margin: 0.7rem 0;
-        border: 0;
-        min-width: 0;
-      }
-      .choice {
-        display: flex;
-        gap: 0.5rem;
-        align-items: baseline;
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 0.4rem;
-        padding: 0.55rem 0.65rem;
-        margin: 0.35rem 0;
-        cursor: pointer;
-      }
-      .choice:has(:checked) {
-        background: var(--wash);
-        border-color: var(--accent);
-      }
-      input {
-        accent-color: var(--accent);
-      }
-      small {
-        display: block;
-        color: var(--soft);
-      }
-      em {
-        font-style: normal;
-        font-weight: 600;
-        color: var(--accent);
-        font-size: 0.76rem;
-        margin-left: 0.45rem;
-      }
-      textarea {
-        width: 100%;
-        resize: vertical;
-        min-height: 2.45rem;
-        background: var(--card);
-        color: inherit;
-        border: 1px solid var(--line);
-        border-radius: 0.4rem;
-        padding: 0.5rem;
-        font: inherit;
-        display: block;
-        margin: 0.45rem 0;
-      }
-      button {
-        font: inherit;
-        color: var(--accent);
-        background: transparent;
-        border: 1px solid var(--line);
-        border-radius: 0.4rem;
-        padding: 0.38rem 0.7rem;
-        cursor: pointer;
-      }
-      button:disabled {
-        opacity: 0.48;
-        cursor: default;
-      }
-      button.primary {
-        color: var(--bg);
-        border-color: var(--accent);
-        background: var(--accent);
-        font-weight: 600;
-      }
-      :focus-visible {
-        outline: 2px solid var(--accent);
-        outline-offset: 2px;
-      }
-      .actions {
-        display: flex;
-        gap: 0.5rem;
-        flex-wrap: wrap;
-      }
-      details {
-        color: var(--soft);
-      }
-      summary {
-        cursor: pointer;
-      }
-      li {
-        margin: 0.3rem 0;
-      }
-      footer {
-        margin-top: auto;
-        position: sticky;
-        bottom: 0;
-        background: var(--bg);
-        border-top: 1px solid var(--line);
-      }
-      footer > div {
-        padding-block: 0.7rem;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.65rem;
-        flex-wrap: wrap;
-      }
-      #notice {
-        font-size: 0.87rem;
-        flex-basis: 100%;
-      }
-      #count {
-        font-size: 0.85rem;
-        color: var(--soft);
-      }
-      #empty {
-        margin: 1.2rem 0;
-      }
-      body {
-        overflow-wrap: anywhere;
-      }
+      /* decision styles */
     </style>
   </head>
   <body>
@@ -202,6 +13,19 @@
       <header>
         <h1>Inbox</h1>
         <p id="focus"></p>
+        <details id="keys">
+          <summary>Keyboard shortcuts <kbd>?</kbd></summary>
+          <p>From omp, <kbd>Ctrl Alt I</kbd> controls the inbox from the prompt. <kbd>q</kbd> returns to omp.</p>
+          <p>
+            <kbd>j k</kbd> move between questions. <kbd>h l</kbd> move between choices. <kbd>Space</kbd> selects a
+            choice, or press its number.
+          </p>
+          <p>
+            <kbd>i</kbd> writes a reply. <kbd>Esc</kbd> keeps your draft. In the omp editor, <kbd>Ctrl G</kbd> cancels
+            the edit. <kbd>x</kbd> clears the current reply.
+          </p>
+          <p><kbd>Enter</kbd> sends the current reply. <kbd>Shift Enter</kbd> sends all selected replies.</p>
+        </details>
       </header>
       <p id="empty" role="status">Connecting to omp…</p>
       <section id="questions" aria-label="Open questions"></section>
@@ -239,6 +63,29 @@
         } catch {}
       }
       const cards = new Map()
+      let activeId,
+        choice = 0
+      function point(id, index, focus = false) {
+        const last = cards.get(activeId)
+        if (last) {
+          delete last.node.dataset.active
+          last.node.querySelector('[data-cursor]')?.removeAttribute('data-cursor')
+        }
+        const changed = activeId !== id
+        activeId = id
+        const card = cards.get(id)
+        if (!card) return
+        const staged = card.options.findIndex(radio => radio.checked)
+        choice = Math.max(0, Math.min(card.options.length - 1, index ?? (changed ? Math.max(0, staged) : choice)))
+        card.node.dataset.active = ''
+        const label = card.options[choice]?.parentElement
+        if (label) label.dataset.cursor = ''
+        if (focus) {
+          card.node.focus({ preventScroll: true })
+          const destination = index === undefined ? card.title : label || card.title
+          destination.scrollIntoView({ block: 'nearest' })
+        }
+      }
       function controls() {
         const n = view.questions.filter(q => drafts[q.id]?.revision === q.revision && drafts[q.id].value.trim()).length
         byId('count').textContent = !online
@@ -263,6 +110,9 @@
       function cardFor(q) {
         const node = el('article'),
           title = el('h2', q.ask)
+        node.tabIndex = -1
+        title.id = 'title-' + q.id
+        node.setAttribute('aria-labelledby', title.id)
         node.append(title)
         if (q.context) node.append(el('p', q.context))
         const fields = el('fieldset')
@@ -289,7 +139,14 @@
           if (opt === q.rec) words.append(el('em', ' Recommended'))
           if (q.descriptions?.[opt]) words.append(el('small', q.descriptions[opt]))
           if (opt === q.rec && q.reason) words.append(el('small', q.reason))
-          label.append(radio, words)
+          const ordinal = options.length + 1
+          label.append(radio)
+          if (ordinal <= 9) {
+            const key = el('kbd', String(ordinal))
+            key.setAttribute('aria-hidden', 'true')
+            label.append(key)
+          }
+          label.append(words)
           fields.append(label)
           options.push(radio)
         }
@@ -311,10 +168,24 @@
         }
         actions.append(one, clear)
         node.append(actions)
-        return { node, one, clear, fields, revision: q.revision }
+        node.addEventListener('focusin', event => {
+          if (event.target === node) return
+          const index = options.indexOf(event.target)
+          point(q.id, index >= 0 ? index : undefined)
+        })
+        return { node, title, free, options, one, clear, fields, revision: q.revision }
       }
       function render(next) {
+        const oldIndex = view.questions.findIndex(q => q.id === activeId)
+        const hadFocus = cards.get(activeId)?.node.contains(document.activeElement)
         view = next
+        if (next.theme) {
+          document.documentElement.style.colorScheme = next.theme.scheme
+          document.documentElement.style.fontSize = next.theme.size + 'px'
+          document.documentElement.style.fontFamily = next.theme.font || ''
+          for (const key of ['bg', 'fg', 'chrome', 'card', 'line', 'soft', 'wash', 'accent'])
+            document.documentElement.style.setProperty('--' + key, next.theme[key])
+        }
         byId('focus').textContent = next.focus || ''
         byId('empty').textContent = next.stale
           ? 'The inbox is catching up. Questions may be out of date.'
@@ -348,6 +219,10 @@
           if (position !== card.node) questions.insertBefore(card.node, position)
           previous = card.node
         }
+        const current = cards.has(activeId)
+          ? activeId
+          : next.questions[Math.max(0, Math.min(oldIndex, next.questions.length - 1))]?.id
+        point(current, undefined, hadFocus && document.activeElement === document.body)
         // Keep a removed row's draft until delivery is acknowledged. A rejected send can reopen it.
         save()
         const context = byId('context')
@@ -395,7 +270,119 @@
         }
       }
       byId('batch').onclick = () => send(view.questions.map(q => q.id))
+      let returning = false
+      async function returnToOmp() {
+        if (returning) return
+        returning = true
+        try {
+          const res = await fetch('return', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          })
+          if (!res.ok) throw new Error(await res.text())
+        } catch (error) {
+          byId('notice').textContent = error.message || 'Could not switch to omp.'
+        } finally {
+          returning = false
+        }
+      }
+      function move(key) {
+        const card = cards.get(activeId)
+        if (key === '?') {
+          byId('keys').open = !byId('keys').open
+          if (byId('keys').open) byId('keys').scrollIntoView({ block: 'nearest' })
+          return true
+        }
+        if (!card || sending) return false
+        const i = view.questions.findIndex(q => q.id === activeId)
+        switch (key) {
+          case 'j':
+          case 'k':
+            point(
+              view.questions[Math.max(0, Math.min(i + (key === 'j' ? 1 : -1), view.questions.length - 1))].id,
+              undefined,
+              true,
+            )
+            break
+          case 'h':
+          case 'l':
+            point(activeId, choice + (key === 'l' ? 1 : -1), true)
+            break
+          case 'i':
+            card.free.focus()
+            break
+          case 'x':
+            card.clear.click()
+            break
+          case 'space':
+            card.options[choice]?.click()
+            break
+          case 'enter':
+            card.one.click()
+            break
+          case 'shift+enter':
+            byId('batch').click()
+            break
+          default:
+            if (!/^[1-9]$/.test(key) || !card.options[Number(key) - 1]) return false
+            point(activeId, Number(key) - 1, true)
+            card.options[choice].click()
+        }
+        return true
+      }
+      function press(event) {
+        if (event.defaultPrevented || event.isComposing || event.metaKey || event.altKey || event.ctrlKey) return
+        const key = event.key
+        if (event.target instanceof HTMLTextAreaElement) {
+          if (key === 'Escape') {
+            event.preventDefault()
+            point(activeId, undefined, true)
+          }
+          return
+        }
+        if (key === 'Escape' || key === 'q') {
+          event.preventDefault()
+          if (!event.repeat) void returnToOmp()
+          return
+        }
+        if (event.repeat && !['h', 'j', 'k', 'l'].includes(key)) return
+        if ((key === ' ' || key === 'Enter') && !event.shiftKey && event.target.closest('button,summary,input')) return
+        const command = key === 'Enter' ? (event.shiftKey ? 'shift+enter' : 'enter') : key === ' ' ? 'space' : key
+        if (move(command)) event.preventDefault()
+      }
+      document.addEventListener('keydown', press)
       const events = new EventSource('events')
+      events.addEventListener('control', async event => {
+        const { id, key, draft } = JSON.parse(event.data)
+        let value, error
+        try {
+          const card = cards.get(activeId)
+          if (key === 'read') {
+            if (!card || sending) throw new Error('No question available to edit.')
+            value = { id: activeId, revision: card.revision, value: card.free.value }
+          } else if (key === 'write') {
+            const target = cards.get(draft.id)
+            if (!target || target.revision !== draft.revision || sending)
+              throw new Error('Question changed. Your text is still in the editor.')
+            if (draft.value.length > target.free.maxLength) throw new Error('Reply exceeds the text field limit.')
+            target.free.value = draft.value
+            target.free.dispatchEvent(new Event('input'))
+          } else {
+            move(key)
+          }
+        } catch (reason) {
+          error = reason.message
+        }
+        await fetch('answer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, value, error }),
+        }).catch(() => {})
+      })
+      matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () =>
+        fetch('appearance', { method: 'POST', headers: { 'Content-Type': 'application/json' } }).catch(() => {}),
+      )
       events.onmessage = e => {
         online = true
         render(JSON.parse(e.data))

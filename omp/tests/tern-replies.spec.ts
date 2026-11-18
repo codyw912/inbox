@@ -104,6 +104,7 @@ test('a typed follow-up keeps the question open and the original submission cann
 test('pane page serves a snapshot on connect, pushes changes, and accepts only same-origin replies', async () => {
   const { initial, host, replies, calls } = await fixture()
   let current = initial
+  let returns = 0
   let projections = 0
   const page = serveDecisions(
     () => {
@@ -111,6 +112,9 @@ test('pane page serves a snapshot on connect, pushes changes, and accepts only s
       return decisionView(current)
     },
     r => sendReplies(host, r),
+    async () => {
+      returns++
+    },
   )
   try {
     page.update()
@@ -134,6 +138,17 @@ test('pane page serves a snapshot on connect, pushes changes, and accepts only s
         headers: { origin, 'content-type': 'application/json' },
         body: JSON.stringify(replies),
       })
+    const back = (origin: string) =>
+      fetch(page.url + 'return', {
+        method: 'POST',
+        headers: { origin, 'content-type': 'application/json' },
+        body: '{}',
+      })
+    expect((await back('https://example.com')).status).toBe(403)
+    expect(returns).toBe(0)
+    expect((await back(origin)).status).toBe(204)
+    expect(returns).toBe(1)
+    expect(calls).toHaveLength(0)
     expect((await post('https://example.com')).status).toBe(403)
     expect((await post(origin)).status).toBe(204)
     current = await host.read()

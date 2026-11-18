@@ -2,7 +2,7 @@
 // Built by omp/build.ts with Bun 1.4.4 from omp/src and hooks/. Do not edit.
 
 // src/host.ts
-import { randomUUID as randomUUID2 } from "crypto";
+import { randomUUID as randomUUID3 } from "crypto";
 
 // ../hooks/gh.ts
 var CANDIDATES = ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"];
@@ -1481,7 +1481,7 @@ var GH_TIMED_OUT_TEXT = `gh did not answer within ${GH_TIMEOUT_MS / 1000} second
 import { existsSync } from "fs";
 import { stat as stat5 } from "fs/promises";
 import { homedir } from "os";
-import { dirname as dirname4, join as join5 } from "path";
+import { dirname as dirname5, join as join6 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 // package.json
 var version = "0.5.0";
@@ -9858,10 +9858,10 @@ function tallestTabHeight(screen, ui, width, now, style, height) {
   const heights = shownTabs().map((t) => drawPanel(screen, t.id === ui.tab ? ui : withTab(ui, t.id, now), width, now, style, height).lines.length);
   return Math.max(...heights);
 }
-function bandLines(screen, width, now, style) {
+function bandLines(screen, width, now, style, shortcut = "/inbox to open ") {
   const counts = bandCounts(screen.view).map((c) => `${c.label} ${style.tone(c.id, String(c.count))}`);
   const left = ` ${counts.length > 0 ? counts.join(` ${style.tone("sep", "\xB7")} `) : style.dim(noCountsText(screen.view, screen.isReadFailed))}`;
-  const countLine = spread(left, style.dim("/inbox to open "), width);
+  const countLine = spread(left, style.dim(shortcut), width);
   const { stop } = screen;
   if (!stop)
     return [countLine];
@@ -12315,6 +12315,288 @@ function questionHistoryPlace(env, dir) {
   };
 }
 
+// src/tern-control.ts
+import { randomUUID } from "crypto";
+var disconnected = "Inbox disconnected. Press Esc to return to omp.";
+function controlChannel() {
+  const pending = new Map;
+  let send;
+  let ready = Promise.withResolvers();
+  function disconnect() {
+    send = undefined;
+    for (const finish of pending.values())
+      finish();
+    ready = Promise.withResolvers();
+  }
+  return {
+    attach(write) {
+      if (send)
+        disconnect();
+      send = write;
+      ready.resolve();
+      return () => {
+        if (send === write)
+          disconnect();
+      };
+    },
+    disconnect,
+    async connected() {
+      if (send)
+        return;
+      let timer;
+      try {
+        await Promise.race([
+          ready.promise,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(disconnected)), 3000);
+          })
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    request(action) {
+      if (!send)
+        return Promise.reject(new Error(disconnected));
+      const id = randomUUID();
+      const { promise, resolve, reject } = Promise.withResolvers();
+      const finish = (answer) => {
+        clearTimeout(timer);
+        pending.delete(id);
+        if (!answer || answer.error)
+          reject(new Error(answer?.error || disconnected));
+        else
+          resolve(answer.value);
+      };
+      const timer = setTimeout(finish, 3000);
+      pending.set(id, finish);
+      try {
+        send(`event: control
+data: ` + JSON.stringify({ id, ...action }) + `
+
+`);
+      } catch {
+        disconnect();
+      }
+      return promise;
+    },
+    answer(body) {
+      if (!body || typeof body !== "object" || !("id" in body) || typeof body.id !== "string")
+        throw new Error("Invalid command response.");
+      pending.get(body.id)?.({
+        value: "value" in body ? body.value : undefined,
+        error: "error" in body && typeof body.error === "string" ? body.error : undefined
+      });
+    }
+  };
+}
+function inboxKeyboard(page, redraw, done, parse, editorFor, fit) {
+  let editor;
+  let editing;
+  let opening;
+  let saving;
+  let stopped = false;
+  let notice = "";
+  const hint = "Inbox \xB7 Esc back \xB7 j/k questions \xB7 1\u20139 select \xB7 i write \xB7 ? keys";
+  function failed(error) {
+    if (stopped)
+      return;
+    notice = error instanceof Error ? error.message : String(error);
+    redraw();
+  }
+  function saveDraft() {
+    if (!editor || !editing || saving)
+      return;
+    saving = [];
+    const value = editor.getExpandedText();
+    (value === editing.value ? Promise.resolve() : page.request({ key: "write", draft: { ...editing, value } })).then(() => {
+      editor = undefined;
+      editing = undefined;
+      notice = "";
+      const buffered = saving ?? [];
+      saving = undefined;
+      for (const data of buffered)
+        input(data);
+    }).catch(failed).finally(() => {
+      saving = undefined;
+      if (!stopped)
+        redraw();
+    });
+  }
+  function input(raw) {
+    if (stopped)
+      return;
+    const key = parse(raw);
+    const waiting = opening ?? saving;
+    if (waiting) {
+      if (waiting.length < 256)
+        waiting.push(raw);
+      return;
+    }
+    if (editor) {
+      if (key === "escape")
+        saveDraft();
+      else if (key === "ctrl+g") {
+        editor = undefined;
+        editing = undefined;
+        notice = "";
+        redraw();
+      } else {
+        if (key === "enter")
+          editor.insertText(`
+`);
+        else
+          editor.handleInput(raw);
+        redraw();
+      }
+      return;
+    }
+    if (key === "escape" || key === "q" || key === "ctrl+alt+i") {
+      done();
+      return;
+    }
+    if (key === "i") {
+      opening = [];
+      page.request({ key: "read" }).then((value) => {
+        if (stopped)
+          return;
+        const draft = value;
+        if (!draft || typeof draft.id !== "string" || typeof draft.revision !== "string" || typeof draft.value !== "string")
+          throw new Error("No open question to write a reply to.");
+        editing = draft;
+        editor = editorFor();
+        editor.focused = true;
+        editor.setText(draft.value);
+        const buffered = opening ?? [];
+        opening = undefined;
+        notice = "";
+        for (const data of buffered)
+          input(data);
+        redraw();
+      }).catch((error) => {
+        opening = undefined;
+        failed(error);
+      });
+      return;
+    }
+    if (key && /^(?:[jkhlx?1-9]|shift\+\?|space|enter|shift\+enter)$/.test(key)) {
+      notice = "";
+      page.request({ key: key === "shift+?" ? "?" : key }).catch(failed);
+    }
+  }
+  return {
+    render: (width) => [
+      fit(editor ? "Inbox \xB7 Esc keep \xB7 Ctrl+G cancel" : width < 45 ? "Inbox \xB7 Esc back \xB7 ? keys" : hint, width),
+      ...notice ? [fit(notice, width)] : [],
+      ...editor ? editor.render(width) : []
+    ],
+    handleInput: input,
+    invalidate: () => {},
+    dispose: () => {
+      stopped = true;
+    }
+  };
+}
+
+// src/tern-theme.ts
+import { watch } from "fs";
+import { dirname as dirname2, join as join3 } from "path";
+import { readFile as readFile3 } from "fs/promises";
+function palette(theme, file, resolve) {
+  const hex = (key) => {
+    const raw = file?.terminal?.[key];
+    return raw !== undefined && raw !== "" && resolve?.(raw, file?.vars ?? {}) || undefined;
+  };
+  return {
+    scheme: theme.isLight ? "light" : "dark",
+    bg: hex("background") ?? theme.getBgHex("userMessageBg"),
+    fg: hex("foreground") ?? theme.getColorHex("text"),
+    card: hex("widget") ?? theme.getBgHex("toolPendingBg"),
+    chrome: hex("chrome") ?? theme.getBgHex("statusLineBg"),
+    wash: theme.getBgHex("selectedBg"),
+    soft: theme.getColorHex("muted"),
+    line: theme.getColorHex("borderMuted"),
+    accent: theme.getColorHex("accent"),
+    size: 14,
+    font: ""
+  };
+}
+function watchTernTheme(publish, run, cwd, api, files, colors) {
+  let live = true, generation = 0, current, watcher, config;
+  let debounce;
+  async function refresh() {
+    const request = ++generation;
+    let next = current && palette(current);
+    try {
+      const state = await run(["tern", "ctl", "state"], { cwd, timeoutMs: 2200 });
+      if (state.code !== 0)
+        return;
+      const window = JSON.parse(state.stdout);
+      const name = window.theme_preview || (window.theme === "light" ? window.theme_light : window.theme_dark);
+      if (!name)
+        return;
+      const chosen = await api.getThemeByName(name);
+      if (!chosen)
+        return;
+      next = palette(chosen, files.loadThemeJsonSync(name), (value, vars) => {
+        const v = colors.resolveVarRefs(value, vars);
+        return typeof v === "number" ? colors.ansi256ToHex(v) : v;
+      });
+      next.scheme = window.theme;
+      if (config) {
+        const settings = await readFile3(join3(config, "settings.json"), "utf8").then(JSON.parse).catch(() => {
+          return;
+        });
+        if (typeof settings?.ui_font === "string" && settings.ui_font.trim())
+          next.font = settings.ui_font + ", system-ui, sans-serif";
+      }
+      if (window.ui_font && window.ui_font >= 8 && window.ui_font <= 56)
+        next.size = window.ui_font;
+    } catch {} finally {
+      if (live && request === generation && next)
+        publish(next);
+    }
+  }
+  const schedule = () => {
+    if (!live)
+      return;
+    clearTimeout(debounce);
+    debounce = setTimeout(() => void refresh(), 50);
+  };
+  const unsubscribe = api.bindTheme((theme) => {
+    current = theme;
+    if (!generation && theme)
+      publish(palette(theme));
+    schedule();
+  });
+  (async () => {
+    const known = process.env.TERN_CONFIG_DIR;
+    if (known)
+      return known;
+    const reply = await run(["tern", "plugin", "dir"], { cwd, timeoutMs: 2200 });
+    return reply.code === 0 && reply.stdout.trim() ? dirname2(reply.stdout.trim()) : undefined;
+  })().then((dir) => {
+    if (!dir || !live)
+      return;
+    config = dir;
+    schedule();
+    watcher = watch(dir, { persistent: false }, (_event, name) => {
+      if (!name || name === "settings.json")
+        schedule();
+    });
+    watcher.on("error", () => watcher?.close());
+  }).catch(() => {});
+  return {
+    refresh: schedule,
+    stop() {
+      live = false;
+      clearTimeout(debounce);
+      watcher?.close();
+      unsubscribe();
+    }
+  };
+}
+
 // src/host-context.ts
 function isUnattended(ctx) {
   const agent = ctx.agent;
@@ -12436,7 +12718,7 @@ async function sendReplies(host, input) {
 }
 
 // src/tern-server.ts
-import { randomUUID } from "crypto";
+import { randomUUID as randomUUID2 } from "crypto";
 
 // ui/decisions.html
 var decisions_default = `<!doctype html>
@@ -12446,196 +12728,7 @@ var decisions_default = `<!doctype html>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Inbox \xB7 omp</title>
     <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #faf9f6;
-        --fg: #212622;
-        --soft: #646c65;
-        --line: #d2d6ce;
-        --card: #fff;
-        --accent: #216449;
-        --wash: #edf4ef;
-        font:
-          15px/1.45 'Instrument Sans',
-          ui-sans-serif,
-          system-ui,
-          sans-serif;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #191d1b;
-          --fg: #ebefe9;
-          --soft: #a2aca4;
-          --card: #232925;
-          --line: #424c45;
-          --accent: #a2dcc0;
-          --wash: #273c30;
-        }
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-        margin: 0;
-        background: var(--bg);
-        color: var(--fg);
-      }
-      main,
-      footer > div {
-        max-width: 48rem;
-        margin: auto;
-        padding: 1.3rem;
-      }
-      main {
-        width: 100%;
-        padding-bottom: 2rem;
-      }
-      header {
-        border-bottom: 1px solid var(--line);
-        padding-bottom: 0.85rem;
-      }
-      h1 {
-        font:
-          600 clamp(1.65rem, 6vw, 2.25rem)/1.15 Georgia,
-          serif;
-        margin: 0;
-      }
-      h2 {
-        font-weight: 600;
-        font-size: 1.05rem;
-        line-height: 1.4;
-        margin: 0;
-      }
-      p {
-        margin: 0.35rem 0;
-        color: var(--soft);
-      }
-      #focus:empty,
-      #notice:empty {
-        display: none;
-      }
-      article {
-        margin: 1.2rem 0;
-        border-bottom: 1px solid var(--line);
-        padding-bottom: 1rem;
-      }
-      fieldset {
-        padding: 0;
-        margin: 0.7rem 0;
-        border: 0;
-        min-width: 0;
-      }
-      .choice {
-        display: flex;
-        gap: 0.5rem;
-        align-items: baseline;
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 0.4rem;
-        padding: 0.55rem 0.65rem;
-        margin: 0.35rem 0;
-        cursor: pointer;
-      }
-      .choice:has(:checked) {
-        background: var(--wash);
-        border-color: var(--accent);
-      }
-      input {
-        accent-color: var(--accent);
-      }
-      small {
-        display: block;
-        color: var(--soft);
-      }
-      em {
-        font-style: normal;
-        font-weight: 600;
-        color: var(--accent);
-        font-size: 0.76rem;
-        margin-left: 0.45rem;
-      }
-      textarea {
-        width: 100%;
-        resize: vertical;
-        min-height: 2.45rem;
-        background: var(--card);
-        color: inherit;
-        border: 1px solid var(--line);
-        border-radius: 0.4rem;
-        padding: 0.5rem;
-        font: inherit;
-        display: block;
-        margin: 0.45rem 0;
-      }
-      button {
-        font: inherit;
-        color: var(--accent);
-        background: transparent;
-        border: 1px solid var(--line);
-        border-radius: 0.4rem;
-        padding: 0.38rem 0.7rem;
-        cursor: pointer;
-      }
-      button:disabled {
-        opacity: 0.48;
-        cursor: default;
-      }
-      button.primary {
-        color: var(--bg);
-        border-color: var(--accent);
-        background: var(--accent);
-        font-weight: 600;
-      }
-      :focus-visible {
-        outline: 2px solid var(--accent);
-        outline-offset: 2px;
-      }
-      .actions {
-        display: flex;
-        gap: 0.5rem;
-        flex-wrap: wrap;
-      }
-      details {
-        color: var(--soft);
-      }
-      summary {
-        cursor: pointer;
-      }
-      li {
-        margin: 0.3rem 0;
-      }
-      footer {
-        margin-top: auto;
-        position: sticky;
-        bottom: 0;
-        background: var(--bg);
-        border-top: 1px solid var(--line);
-      }
-      footer > div {
-        padding-block: 0.7rem;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.65rem;
-        flex-wrap: wrap;
-      }
-      #notice {
-        font-size: 0.87rem;
-        flex-basis: 100%;
-      }
-      #count {
-        font-size: 0.85rem;
-        color: var(--soft);
-      }
-      #empty {
-        margin: 1.2rem 0;
-      }
-      body {
-        overflow-wrap: anywhere;
-      }
+      /* decision styles */
     </style>
   </head>
   <body>
@@ -12643,6 +12736,19 @@ var decisions_default = `<!doctype html>
       <header>
         <h1>Inbox</h1>
         <p id="focus"></p>
+        <details id="keys">
+          <summary>Keyboard shortcuts <kbd>?</kbd></summary>
+          <p>From omp, <kbd>Ctrl Alt I</kbd> controls the inbox from the prompt. <kbd>q</kbd> returns to omp.</p>
+          <p>
+            <kbd>j k</kbd> move between questions. <kbd>h l</kbd> move between choices. <kbd>Space</kbd> selects a
+            choice, or press its number.
+          </p>
+          <p>
+            <kbd>i</kbd> writes a reply. <kbd>Esc</kbd> keeps your draft. In the omp editor, <kbd>Ctrl G</kbd> cancels
+            the edit. <kbd>x</kbd> clears the current reply.
+          </p>
+          <p><kbd>Enter</kbd> sends the current reply. <kbd>Shift Enter</kbd> sends all selected replies.</p>
+        </details>
       </header>
       <p id="empty" role="status">Connecting to omp\u2026</p>
       <section id="questions" aria-label="Open questions"></section>
@@ -12680,6 +12786,29 @@ var decisions_default = `<!doctype html>
         } catch {}
       }
       const cards = new Map()
+      let activeId,
+        choice = 0
+      function point(id, index, focus = false) {
+        const last = cards.get(activeId)
+        if (last) {
+          delete last.node.dataset.active
+          last.node.querySelector('[data-cursor]')?.removeAttribute('data-cursor')
+        }
+        const changed = activeId !== id
+        activeId = id
+        const card = cards.get(id)
+        if (!card) return
+        const staged = card.options.findIndex(radio => radio.checked)
+        choice = Math.max(0, Math.min(card.options.length - 1, index ?? (changed ? Math.max(0, staged) : choice)))
+        card.node.dataset.active = ''
+        const label = card.options[choice]?.parentElement
+        if (label) label.dataset.cursor = ''
+        if (focus) {
+          card.node.focus({ preventScroll: true })
+          const destination = index === undefined ? card.title : label || card.title
+          destination.scrollIntoView({ block: 'nearest' })
+        }
+      }
       function controls() {
         const n = view.questions.filter(q => drafts[q.id]?.revision === q.revision && drafts[q.id].value.trim()).length
         byId('count').textContent = !online
@@ -12704,6 +12833,9 @@ var decisions_default = `<!doctype html>
       function cardFor(q) {
         const node = el('article'),
           title = el('h2', q.ask)
+        node.tabIndex = -1
+        title.id = 'title-' + q.id
+        node.setAttribute('aria-labelledby', title.id)
         node.append(title)
         if (q.context) node.append(el('p', q.context))
         const fields = el('fieldset')
@@ -12730,7 +12862,14 @@ var decisions_default = `<!doctype html>
           if (opt === q.rec) words.append(el('em', ' Recommended'))
           if (q.descriptions?.[opt]) words.append(el('small', q.descriptions[opt]))
           if (opt === q.rec && q.reason) words.append(el('small', q.reason))
-          label.append(radio, words)
+          const ordinal = options.length + 1
+          label.append(radio)
+          if (ordinal <= 9) {
+            const key = el('kbd', String(ordinal))
+            key.setAttribute('aria-hidden', 'true')
+            label.append(key)
+          }
+          label.append(words)
           fields.append(label)
           options.push(radio)
         }
@@ -12752,10 +12891,24 @@ var decisions_default = `<!doctype html>
         }
         actions.append(one, clear)
         node.append(actions)
-        return { node, one, clear, fields, revision: q.revision }
+        node.addEventListener('focusin', event => {
+          if (event.target === node) return
+          const index = options.indexOf(event.target)
+          point(q.id, index >= 0 ? index : undefined)
+        })
+        return { node, title, free, options, one, clear, fields, revision: q.revision }
       }
       function render(next) {
+        const oldIndex = view.questions.findIndex(q => q.id === activeId)
+        const hadFocus = cards.get(activeId)?.node.contains(document.activeElement)
         view = next
+        if (next.theme) {
+          document.documentElement.style.colorScheme = next.theme.scheme
+          document.documentElement.style.fontSize = next.theme.size + 'px'
+          document.documentElement.style.fontFamily = next.theme.font || ''
+          for (const key of ['bg', 'fg', 'chrome', 'card', 'line', 'soft', 'wash', 'accent'])
+            document.documentElement.style.setProperty('--' + key, next.theme[key])
+        }
         byId('focus').textContent = next.focus || ''
         byId('empty').textContent = next.stale
           ? 'The inbox is catching up. Questions may be out of date.'
@@ -12789,6 +12942,10 @@ var decisions_default = `<!doctype html>
           if (position !== card.node) questions.insertBefore(card.node, position)
           previous = card.node
         }
+        const current = cards.has(activeId)
+          ? activeId
+          : next.questions[Math.max(0, Math.min(oldIndex, next.questions.length - 1))]?.id
+        point(current, undefined, hadFocus && document.activeElement === document.body)
         // Keep a removed row's draft until delivery is acknowledged. A rejected send can reopen it.
         save()
         const context = byId('context')
@@ -12836,7 +12993,119 @@ var decisions_default = `<!doctype html>
         }
       }
       byId('batch').onclick = () => send(view.questions.map(q => q.id))
+      let returning = false
+      async function returnToOmp() {
+        if (returning) return
+        returning = true
+        try {
+          const res = await fetch('return', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+          })
+          if (!res.ok) throw new Error(await res.text())
+        } catch (error) {
+          byId('notice').textContent = error.message || 'Could not switch to omp.'
+        } finally {
+          returning = false
+        }
+      }
+      function move(key) {
+        const card = cards.get(activeId)
+        if (key === '?') {
+          byId('keys').open = !byId('keys').open
+          if (byId('keys').open) byId('keys').scrollIntoView({ block: 'nearest' })
+          return true
+        }
+        if (!card || sending) return false
+        const i = view.questions.findIndex(q => q.id === activeId)
+        switch (key) {
+          case 'j':
+          case 'k':
+            point(
+              view.questions[Math.max(0, Math.min(i + (key === 'j' ? 1 : -1), view.questions.length - 1))].id,
+              undefined,
+              true,
+            )
+            break
+          case 'h':
+          case 'l':
+            point(activeId, choice + (key === 'l' ? 1 : -1), true)
+            break
+          case 'i':
+            card.free.focus()
+            break
+          case 'x':
+            card.clear.click()
+            break
+          case 'space':
+            card.options[choice]?.click()
+            break
+          case 'enter':
+            card.one.click()
+            break
+          case 'shift+enter':
+            byId('batch').click()
+            break
+          default:
+            if (!/^[1-9]$/.test(key) || !card.options[Number(key) - 1]) return false
+            point(activeId, Number(key) - 1, true)
+            card.options[choice].click()
+        }
+        return true
+      }
+      function press(event) {
+        if (event.defaultPrevented || event.isComposing || event.metaKey || event.altKey || event.ctrlKey) return
+        const key = event.key
+        if (event.target instanceof HTMLTextAreaElement) {
+          if (key === 'Escape') {
+            event.preventDefault()
+            point(activeId, undefined, true)
+          }
+          return
+        }
+        if (key === 'Escape' || key === 'q') {
+          event.preventDefault()
+          if (!event.repeat) void returnToOmp()
+          return
+        }
+        if (event.repeat && !['h', 'j', 'k', 'l'].includes(key)) return
+        if ((key === ' ' || key === 'Enter') && !event.shiftKey && event.target.closest('button,summary,input')) return
+        const command = key === 'Enter' ? (event.shiftKey ? 'shift+enter' : 'enter') : key === ' ' ? 'space' : key
+        if (move(command)) event.preventDefault()
+      }
+      document.addEventListener('keydown', press)
       const events = new EventSource('events')
+      events.addEventListener('control', async event => {
+        const { id, key, draft } = JSON.parse(event.data)
+        let value, error
+        try {
+          const card = cards.get(activeId)
+          if (key === 'read') {
+            if (!card || sending) throw new Error('No question available to edit.')
+            value = { id: activeId, revision: card.revision, value: card.free.value }
+          } else if (key === 'write') {
+            const target = cards.get(draft.id)
+            if (!target || target.revision !== draft.revision || sending)
+              throw new Error('Question changed. Your text is still in the editor.')
+            if (draft.value.length > target.free.maxLength) throw new Error('Reply exceeds the text field limit.')
+            target.free.value = draft.value
+            target.free.dispatchEvent(new Event('input'))
+          } else {
+            move(key)
+          }
+        } catch (reason) {
+          error = reason.message
+        }
+        await fetch('answer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, value, error }),
+        }).catch(() => {})
+      })
+      matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () =>
+        fetch('appearance', { method: 'POST', headers: { 'Content-Type': 'application/json' } }).catch(() => {}),
+      )
       events.onmessage = e => {
         online = true
         render(JSON.parse(e.data))
@@ -12850,10 +13119,222 @@ var decisions_default = `<!doctype html>
 </html>
 `;
 
+// ui/decisions.css
+var decisions_default2 = `:root {
+  color-scheme: light dark;
+  --bg: Canvas;
+  --fg: CanvasText;
+  --soft: GrayText;
+  --line: color-mix(in srgb, CanvasText 23%, Canvas);
+  --card: Canvas;
+  --chrome: Canvas;
+  --accent: AccentColor;
+  --wash: color-mix(in srgb, AccentColor 14%, Canvas);
+  font:
+    14px/1.45 Geist,
+    system-ui,
+    sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+main,
+footer > div {
+  max-width: 48rem;
+  margin: auto;
+  padding: 0.95rem 1rem;
+}
+main {
+  width: 100%;
+  padding-bottom: 2rem;
+}
+header {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.85rem;
+}
+h1 {
+  font: inherit;
+  font-size: 1.16rem;
+  line-height: 1.3;
+  font-weight: 600;
+  margin: 0;
+}
+h2 {
+  font-weight: 600;
+  font-size: 1rem;
+  line-height: 1.4;
+  margin: 0;
+}
+p {
+  margin: 0.35rem 0;
+  color: var(--soft);
+}
+#focus:empty,
+#notice:empty {
+  display: none;
+}
+article {
+  margin: 0.9rem 0;
+  border-inline-start: 2px solid transparent;
+  padding-inline-start: 0.7rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 1rem;
+}
+article[data-active] {
+  border-inline-start-color: var(--accent);
+}
+article:focus {
+  outline: none;
+}
+article[data-active] .choice[data-cursor] {
+  outline: 1px dashed var(--accent);
+  outline-offset: -3px;
+}
+h2,
+.choice,
+textarea {
+  scroll-margin-block: 0.75rem 7rem;
+}
+kbd {
+  font:
+    0.82rem ui-monospace,
+    monospace;
+  color: var(--fg);
+}
+#keys {
+  margin-top: 0.5rem;
+}
+#keys > p {
+  font-size: 0.85rem;
+}
+fieldset {
+  padding: 0;
+  margin: 0.7rem 0;
+  border: 0;
+  min-width: 0;
+}
+.choice {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.55rem 0.65rem;
+  margin: 0.35rem 0;
+  cursor: pointer;
+}
+.choice:has(:checked) {
+  background: var(--wash);
+  border-color: var(--accent);
+}
+input {
+  accent-color: var(--accent);
+}
+small {
+  display: block;
+  color: var(--soft);
+}
+em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 0.76rem;
+  margin-left: 0.45rem;
+}
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 2.45rem;
+  background: var(--card);
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.5rem;
+  font: inherit;
+  display: block;
+  margin: 0.45rem 0;
+}
+button {
+  font: inherit;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.38rem 0.7rem;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+button.primary {
+  color: var(--bg);
+  border-color: var(--accent);
+  background: var(--accent);
+  font-weight: 600;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+details {
+  color: var(--soft);
+}
+summary {
+  cursor: pointer;
+}
+li {
+  margin: 0.3rem 0;
+}
+footer {
+  margin-top: auto;
+  position: sticky;
+  bottom: 0;
+  background: var(--chrome);
+  border-top: 1px solid var(--line);
+}
+footer > div {
+  padding-block: 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+#notice {
+  font-size: 0.87rem;
+  flex-basis: 100%;
+}
+#count {
+  font-size: 0.85rem;
+  color: var(--soft);
+}
+#empty {
+  margin: 1.2rem 0;
+}
+body {
+  overflow-wrap: anywhere;
+}
+`;
+
 // src/tern-server.ts
-var page = String(decisions_default);
-function serveDecisions(readView, submit) {
-  const base = "/" + randomUUID() + "/";
+var page = String(decisions_default).replace("/* decision styles */", () => String(decisions_default2));
+function serveDecisions(readView, submit, returnToOmp, refreshTheme) {
+  const base = "/" + randomUUID2() + "/";
   const streams = new Set;
   const headers = {
     "cache-control": "no-store",
@@ -12861,6 +13342,7 @@ function serveDecisions(readView, submit) {
     "x-content-type-options": "nosniff",
     "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
   };
+  const keyboard = controlChannel();
   let data = "";
   const emit = () => "data: " + data + `
 
@@ -12879,28 +13361,38 @@ function serveDecisions(readView, submit) {
       if (route === "events" && req.method === "GET") {
         server.timeout(req, 0);
         let client;
+        let detach;
         const stream = new ReadableStream({
           start(c) {
             client = c;
             streams.add(c);
             data = JSON.stringify(readView());
             c.enqueue(emit());
+            detach = keyboard.attach((message) => c.enqueue(message));
           },
           cancel() {
             streams.delete(client);
+            detach?.();
           }
         });
         return new Response(stream, { headers: { ...headers, "content-type": "text/event-stream" } });
       }
-      if (route !== "send" || req.method !== "POST")
+      if (route !== "send" && route !== "return" && route !== "answer" && route !== "appearance" || req.method !== "POST")
         return new Response(null, { status: 404 });
       if (req.headers.get("origin") !== server.url.origin || req.headers.get("content-type") !== "application/json")
         return new Response(null, { status: 403 });
       try {
-        await submit(await req.json());
+        if (route === "appearance")
+          refreshTheme?.();
+        else if (route === "answer")
+          keyboard.answer(await req.json());
+        else if (route === "return")
+          await returnToOmp();
+        else
+          await submit(await req.json());
         return new Response(null, { status: 204 });
       } catch (error) {
-        return new Response(error instanceof Error ? error.message : "Could not send the replies.", {
+        return new Response(error instanceof Error ? error.message : "omp could not complete the request.", {
           status: 409,
           headers
         });
@@ -12909,6 +13401,7 @@ function serveDecisions(readView, submit) {
   });
   server.unref();
   return {
+    keyboard,
     url: new URL(base, server.url).href,
     update() {
       if (!streams.size)
@@ -12926,6 +13419,7 @@ function serveDecisions(readView, submit) {
       }
     },
     stop() {
+      keyboard.disconnect();
       for (const c of streams)
         c.close();
       streams.clear();
@@ -12941,13 +13435,39 @@ function ternTarget(env) {
     return null;
   return { owner: Number(id), auto: env.OMP_INBOX_TERN !== "manual" };
 }
-function ternPane(target, run, cwd, host, notify) {
+function ternPane(target, run, cwd, host, notify, watchTheme) {
   let page;
   let opening;
+  const lifetime = new AbortController;
   let stopped = false;
   let tried = false;
   let focusRequested = false;
   let latest;
+  let theme;
+  let subscription;
+  let observing;
+  function observe() {
+    if (!watchTheme || observing)
+      return;
+    observing = watchTheme((next) => {
+      if (stopped)
+        return;
+      theme = next;
+      page?.update();
+    }, run, cwd).then((sub) => {
+      if (stopped)
+        sub.stop();
+      else
+        subscription = sub;
+    }).catch(() => {});
+  }
+  async function focusBlock(id) {
+    if (stopped)
+      throw new Error("This omp session has ended.");
+    const result = await run(["tern", "focus", String(id)], { cwd, timeoutMs: 5000 });
+    if (result.code !== 0)
+      throw new Error("Tern could not switch panes.");
+  }
   async function browser(op) {
     const response = await run(["tern", "browser", JSON.stringify(op), "--timeout", "12"], { cwd, timeoutMs: 14000 });
     if (response.code !== 0)
@@ -12971,21 +13491,22 @@ function ternPane(target, run, cwd, host, notify) {
   }
   async function launch() {
     const state = latest ?? await host.read();
+    observe();
+    await observing;
     if (stopped)
       return;
-    page ??= serveDecisions(() => decisionView(latest ?? state), (replies) => {
+    page ??= serveDecisions(() => ({ ...decisionView(latest ?? state), theme }), (replies) => {
       if (stopped)
         throw new Error("This omp session has ended.");
       return sendReplies(host, replies);
-    });
+    }, () => focusBlock(target.owner), () => subscription?.refresh());
     const { url } = page;
     const found = await existing(url);
     if (stopped)
       return;
     if (found !== undefined) {
-      const result = await run(["tern", "focus", String(found)], { cwd, timeoutMs: 5000 });
-      if (result.code !== 0)
-        throw new Error("Tern could not focus the inbox. Retry /inbox.");
+      if (focusRequested)
+        await focusBlock(found);
       return;
     }
     const previous = focusRequested ? undefined : await focused().catch(() => {
@@ -13020,6 +13541,13 @@ function ternPane(target, run, cwd, host, notify) {
   }
   return {
     open,
+    async keyboard() {
+      await open(false);
+      if (stopped || !page)
+        throw new Error("The omp session changed.");
+      await page.keyboard.connected();
+      return { request: page.keyboard.request, signal: lifetime.signal };
+    },
     saved(state) {
       if (stopped)
         return;
@@ -13033,6 +13561,8 @@ function ternPane(target, run, cwd, host, notify) {
     },
     stop() {
       stopped = true;
+      lifetime.abort();
+      subscription?.stop();
       if (!page)
         return;
       const { url } = page;
@@ -13041,7 +13571,7 @@ function ternPane(target, run, cwd, host, notify) {
     }
   };
 }
-function ternSessions(target, run, sessions) {
+function ternSessions(target, run, sessions, watchTheme) {
   let active;
   return {
     start(ctx) {
@@ -13055,7 +13585,7 @@ function ternSessions(target, run, sessions) {
       const panel = ternPane(target, run, ctx.cwd, {
         ...host,
         deliver: (s, text, key) => active?.panel === panel && sessionIdOf(ctx) === id ? host.deliver(s, text, key) : Promise.resolve({ state: "rejected", reason: "The omp session changed." })
-      }, (message) => ctx.ui.notify(message, "warning"));
+      }, (message) => ctx.ui.notify(message, "warning"), watchTheme);
       active = { id, panel, sawSave: false };
       host.read().then((state) => {
         if (active?.panel === panel && !active.sawSave)
@@ -13067,6 +13597,11 @@ function ternSessions(target, run, sessions) {
         return;
       active.sawSave = true;
       active.panel.saved(state);
+    },
+    async keyboard(ctx) {
+      if (ctx.mode !== "tui" || active?.id !== sessionIdOf(ctx))
+        return;
+      return active.panel.keyboard();
     },
     async open(ctx) {
       if (ctx.mode !== "tui" || active?.id !== sessionIdOf(ctx))
@@ -13858,9 +14393,9 @@ function activityHandlers(context, sessions) {
 }
 
 // src/host-presses.ts
-import { watch } from "fs";
-import { appendFile, lstat, mkdir as mkdir3, readdir as readdir3, readFile as readFile3, rename as rename3, rm, stat as stat4, writeFile as writeFile3 } from "fs/promises";
-import { dirname as dirname2, join as join3 } from "path";
+import { watch as watch2 } from "fs";
+import { appendFile, lstat, mkdir as mkdir3, readdir as readdir3, readFile as readFile4, rename as rename3, rm, stat as stat4, writeFile as writeFile3 } from "fs/promises";
+import { dirname as dirname3, join as join4 } from "path";
 import { fileURLToPath } from "url";
 
 // ../hooks/herdr-press-file.ts
@@ -14588,7 +15123,7 @@ async function startInHerdrApp(run, files, target, bundledFolder, now, log) {
 // src/host-presses.ts
 var HERDR_LOG_BYTES = 64 * 1024;
 function herdrLog(dir) {
-  const path = join3(dir, "herdr.log");
+  const path = join4(dir, "herdr.log");
   return (text) => void (async () => {
     const size = await stat4(path).then((s) => s.size, () => 0);
     const line = `${new Date().toISOString()} ${text}
@@ -14605,16 +15140,16 @@ var pressFiles = {
     const problem = pressFileProblem(await stat4(path));
     if (problem)
       throw new Error(problem);
-    return readFile3(path, "utf8");
+    return readFile4(path, "utf8");
   },
   move: (from, to) => rename3(from, to),
   remove: (path) => rm(path, { force: true })
 };
 var startFiles = {
   kind: (path) => lstat(path).then((s) => s.isSymbolicLink() ? "link" : s.isDirectory() ? "folder" : s.isFile() ? "file" : "other", () => null),
-  read: (path) => readFile3(path, "utf8"),
+  read: (path) => readFile4(path, "utf8"),
   write: async (path, text) => {
-    await mkdir3(dirname2(path), { recursive: true });
+    await mkdir3(dirname3(path), { recursive: true });
     await writeFile3(path, text);
   },
   makeFolder: async (path) => void await mkdir3(path, { recursive: true }),
@@ -14628,7 +15163,7 @@ async function startOmpInHerdrApp(target, run, log) {
     return null;
   return startInHerdrApp(run, startFiles, target, bundledHerdrMod(), Date.now(), log);
 }
-var bundledHerdrMod = () => join3(dirname2(fileURLToPath(import.meta.url)), "herdr-mod");
+var bundledHerdrMod = () => join4(dirname3(fileURLToPath(import.meta.url)), "herdr-mod");
 var message4 = (err) => err instanceof Error ? err.message : String(err);
 function ompPresses(target, apply, log) {
   let stopFollowing = null;
@@ -14649,7 +15184,7 @@ function ompPresses(target, apply, log) {
       } catch (err) {
         return log(`Herdr presses not read: ${message4(err)}`);
       }
-      const drain = pressDrainer(pressFiles, (sessionId) => isPublishedHere((path) => readFile3(path, "utf8"), appHome, sessionId, "omp", terminal), async (_id, file) => {
+      const drain = pressDrainer(pressFiles, (sessionId) => isPublishedHere((path) => readFile4(path, "utf8"), appHome, sessionId, "omp", terminal), async (_id, file) => {
         await apply(ctx, file);
         return true;
       }, log);
@@ -14659,7 +15194,7 @@ function ompPresses(target, apply, log) {
         mkdir3(folder, { recursive: true }).then(() => {
           if (isStopped)
             return;
-          watcher = watch(folder, () => wake());
+          watcher = watch2(folder, () => wake());
           watcher.on("error", (err) => log(`Herdr presses not watched: ${message4(err)}`));
           wake();
         }).catch((err) => log(`Herdr presses not watched: ${message4(err)}`));
@@ -14833,10 +15368,29 @@ function panelCalls(context, sessions, herdrAsk) {
   });
   return { inbox, liveSource };
 }
+function bandWidget(ctx, inbox, tui, style, now, shortcut) {
+  let screen = null;
+  const refresh = () => inbox.screen(ctx).then((next) => {
+    screen = next;
+    tui.requestRender();
+  }).catch(() => {
+    if (screen && !screen.isReadFailed) {
+      screen = { ...screen, isReadFailed: true };
+      tui.requestRender();
+    }
+  });
+  refresh();
+  const stop = inbox.onChange(ctx, () => void refresh());
+  return {
+    render: (width) => screen ? bandLines(screen, width, now(), style, shortcut) : [],
+    invalidate: () => {},
+    dispose: stop
+  };
+}
 
 // src/host-sessions.ts
 import { mkdir as mkdir4, readdir as readdir4, rename as rename4, rm as rm2, rmdir, writeFile as writeFile4 } from "fs/promises";
-import { dirname as dirname3, join as join4 } from "path";
+import { dirname as dirname4, join as join5 } from "path";
 
 // ../hooks/conversation.ts
 var NL7 = `
@@ -14878,7 +15432,7 @@ function sessionIdInFile(file) {
 }
 var publishFiles = {
   write: async (path, text) => {
-    await mkdir4(dirname3(path), { recursive: true });
+    await mkdir4(dirname4(path), { recursive: true });
     await writeFile4(path, text);
   },
   move: (from, to) => rename4(from, to),
@@ -14887,7 +15441,7 @@ var publishFiles = {
 };
 var recordFiles = {
   write: async (path, text) => {
-    await mkdir4(dirname3(path), { recursive: true });
+    await mkdir4(dirname4(path), { recursive: true });
     await writeFile4(path, text);
   },
   list: (folder) => readdir4(folder).catch(() => []),
@@ -14896,7 +15450,7 @@ var recordFiles = {
 };
 var statusRecords = (dir, sessionId) => ({
   host: "omp",
-  folder: join4(dir, "overview-calls"),
+  folder: join5(dir, "overview-calls"),
   session: sessionId,
   files: recordFiles
 });
@@ -15312,13 +15866,13 @@ async function isUsageLimitOutcome(status, message) {
   return ai.isUsageLimitOutcome(status, message);
 }
 var defaultDeps = {
-  stateDir: (pi) => join5(pi.pi.getAgentDir(), "inbox"),
+  stateDir: (pi) => join6(pi.pi.getAgentDir(), "inbox"),
   now: Date.now,
-  newId: randomUUID2,
+  newId: randomUUID3,
   settleWindowMs: SETTLED_MS,
   home: homedir(),
-  isNextBuild: existsSync(join5(dirname4(dirname4(fileURLToPath2(import.meta.url))), NEXT_BUILD_MARK)),
-  comparePage: join5(dirname4(fileURLToPath2(import.meta.url)), COMPARE_PAGE_FILE),
+  isNextBuild: existsSync(join6(dirname5(dirname5(fileURLToPath2(import.meta.url))), NEXT_BUILD_MARK)),
+  comparePage: join6(dirname5(fileURLToPath2(import.meta.url)), COMPARE_PAGE_FILE),
   complete: defaultComplete,
   copy: copyToClipboard,
   background: (work) => void work.catch(() => {
@@ -15328,6 +15882,7 @@ var defaultDeps = {
   isUsageLimit: isUsageLimitOutcome,
   herdrTarget: herdrTarget(process.env),
   tern: ternTarget(process.env),
+  watchTheme: async (publish, run, cwd) => watchTernTheme(publish, run, cwd, await import("@oh-my-pi/pi-tui/theme"), await import("@oh-my-pi/pi-tui/theme/loader"), await import("@oh-my-pi/pi-tui/theme/color")),
   questionHistory: (dir) => questionHistoryPlace(process.env, dir)
 };
 var messageOf = (err) => err instanceof Error ? err.message : String(err);
@@ -15462,7 +16017,23 @@ function createInbox(pi, deps = defaultDeps) {
   const sessions = sessionCalls(context);
   const { change } = sessions;
   const turns = turnHandlers(context, sessions);
-  const tern = ternSessions(deps.tern, run, sessions);
+  const tern = ternSessions(deps.tern, run, sessions, deps.watchTheme);
+  if (deps.tern)
+    pi.registerShortcut("ctrl+alt+i", {
+      description: "Answer inbox questions from the composer",
+      handler: async (ctx) => {
+        try {
+          const page = await tern.keyboard(ctx);
+          if (!page)
+            return;
+          const { Editor, parseKey, truncateToWidth } = await import("@oh-my-pi/pi-tui");
+          const { getEditorTheme } = await import("@oh-my-pi/pi-tui/theme");
+          await ctx.ui.custom((tui, _theme, _keys, done) => inboxKeyboard(page, () => tui.requestRender(), () => done(null), parseKey, () => new Editor(getEditorTheme()), truncateToWidth), { signal: page.signal });
+        } catch (error) {
+          ctx.ui.notify(messageOf(error), "warning");
+        }
+      }
+    });
   context.saved = tern.saved;
   const start = (ctx, parentFile) => {
     tern.start(ctx);
@@ -15545,23 +16116,7 @@ function createInbox(pi, deps = defaultDeps) {
       return;
     ctx.ui.setWidget(BAND_KEY, (tui, theme) => {
       const style = styleOf(theme);
-      let screen = null;
-      const refresh = () => inbox.screen(ctx).then((next) => {
-        screen = next;
-        tui.requestRender();
-      }).catch(() => {
-        if (screen && !screen.isReadFailed) {
-          screen = { ...screen, isReadFailed: true };
-          tui.requestRender();
-        }
-      });
-      refresh();
-      const stop = inbox.onChange(ctx, () => void refresh());
-      return {
-        render: (width) => screen ? bandLines(screen, width, deps.now(), style) : [],
-        invalidate: () => {},
-        dispose: stop
-      };
+      return bandWidget(ctx, inbox, tui, style, deps.now, deps.tern ? "Ctrl+Alt+I to answer " : undefined);
     }, { placement: "aboveEditor" });
   }
   async function openPanelUi(ctx, isDemo) {

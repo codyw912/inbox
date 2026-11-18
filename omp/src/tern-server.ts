@@ -1,14 +1,22 @@
+import { controlChannel } from './tern-control'
 import { randomUUID } from 'node:crypto'
+import type { TernPalette } from './tern-theme'
 import type { decisionView } from './tern-replies'
 
 // Bun loads the text attribute as a string. Its ambient *.html type describes the default HTML bundle loader.
 import markup from '../ui/decisions.html' with { type: 'text' }
-const page = String(markup)
+import css from '../ui/decisions.css' with { type: 'text' }
+const page = String(markup).replace('/* decision styles */', () => String(css))
 
-type View = ReturnType<typeof decisionView>
+type View = ReturnType<typeof decisionView> & { theme?: TernPalette }
 
 /** A loopback page scoped to one omp session. Publish only changes visible in the decision pane. */
-export function serveDecisions(readView: () => View, submit: (replies: unknown) => Promise<void>) {
+export function serveDecisions(
+  readView: () => View,
+  submit: (replies: unknown) => Promise<void>,
+  returnToOmp: () => Promise<void>,
+  refreshTheme?: () => void,
+) {
   const base = '/' + randomUUID() + '/'
   const streams = new Set<ReadableStreamDefaultController<string>>()
   const headers = {
@@ -18,6 +26,7 @@ export function serveDecisions(readView: () => View, submit: (replies: unknown) 
     'content-security-policy':
       "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
   }
+  const keyboard = controlChannel()
   let data = ''
   const emit = () => 'data: ' + data + '\n\n'
   const server = Bun.serve({
@@ -33,27 +42,37 @@ export function serveDecisions(readView: () => View, submit: (replies: unknown) 
       if (route === 'events' && req.method === 'GET') {
         server.timeout(req, 0)
         let client: ReadableStreamDefaultController<string>
+        let detach: (() => void) | undefined
         const stream = new ReadableStream<string>({
           start(c) {
             client = c
             streams.add(c)
             data = JSON.stringify(readView())
             c.enqueue(emit())
+            detach = keyboard.attach(message => c.enqueue(message))
           },
           cancel() {
             streams.delete(client)
+            detach?.()
           },
         })
         return new Response(stream, { headers: { ...headers, 'content-type': 'text/event-stream' } })
       }
-      if (route !== 'send' || req.method !== 'POST') return new Response(null, { status: 404 })
+      if (
+        (route !== 'send' && route !== 'return' && route !== 'answer' && route !== 'appearance') ||
+        req.method !== 'POST'
+      )
+        return new Response(null, { status: 404 })
       if (req.headers.get('origin') !== server.url.origin || req.headers.get('content-type') !== 'application/json')
         return new Response(null, { status: 403 })
       try {
-        await submit(await req.json())
+        if (route === 'appearance') refreshTheme?.()
+        else if (route === 'answer') keyboard.answer(await req.json())
+        else if (route === 'return') await returnToOmp()
+        else await submit(await req.json())
         return new Response(null, { status: 204 })
       } catch (error) {
-        return new Response(error instanceof Error ? error.message : 'Could not send the replies.', {
+        return new Response(error instanceof Error ? error.message : 'omp could not complete the request.', {
           status: 409,
           headers,
         })
@@ -62,6 +81,7 @@ export function serveDecisions(readView: () => View, submit: (replies: unknown) 
   })
   server.unref()
   return {
+    keyboard,
     url: new URL(base, server.url).href,
     update() {
       if (!streams.size) return
@@ -77,6 +97,7 @@ export function serveDecisions(readView: () => View, submit: (replies: unknown) 
       }
     },
     stop() {
+      keyboard.disconnect()
       for (const c of streams) c.close()
       streams.clear()
       void server.stop(true)
