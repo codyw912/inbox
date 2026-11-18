@@ -11,7 +11,7 @@ export type ReplyHost = Pick<
   'read' | 'update' | 'now' | 'newId' | 'deliver' | 'comparePage' | 'compareInBackground' | 'answerMessage'
 >
 
-type Reply = { id: string; revision: string; kind: 'choice' | 'text'; value: string }
+export type Reply = { id: string; revision: string; kind: 'choice' | 'text'; value: string }
 
 function revision(item: Item, last?: LastAction) {
   const sent = last?.delivery?.state === 'failed' ? null : last?.at
@@ -20,26 +20,19 @@ function revision(item: Item, last?: LastAction) {
     .digest('hex')
 }
 
-export function decisionView(s: OmpState) {
-  return {
-    questions: s.ledger.items
-      .filter(i => i.kind === 'question')
-      .map(i => ({
-        id: i.id,
-        ask: i.ask,
-        options: i.options,
-        rec: i.rec,
-        reason: i.recReason,
-        context: i.context,
-        descriptions: i.optionDescriptions,
-        revision: revision(i, s.lastActions[i.id]),
-      })),
-    focus: s.ledger.overview?.head?.title,
-    tasks: s.ledger.items.filter(i => i.kind === 'task').map(i => i.ask),
-    findings: s.ledger.findings.map(f => f.title),
-    prs: s.ledger.prs,
-    stale: s.presence.ledgerState !== 'current',
-  }
+export function questionsOf(s: OmpState) {
+  return s.ledger.items
+    .filter(i => i.kind === 'question')
+    .map(i => ({
+      id: i.id,
+      ask: i.ask,
+      options: i.options,
+      rec: i.rec,
+      reason: i.recReason,
+      context: i.context,
+      descriptions: i.optionDescriptions,
+      revision: revision(i, s.lastActions[i.id]),
+    }))
 }
 
 function isReply(value: unknown): value is Reply {

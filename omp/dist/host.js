@@ -2,7 +2,7 @@
 // Built by omp/build.ts with Bun 1.4.4 from omp/src and hooks/. Do not edit.
 
 // src/host.ts
-import { randomUUID as randomUUID3 } from "crypto";
+import { randomUUID } from "crypto";
 
 // ../hooks/gh.ts
 var CANDIDATES = ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"];
@@ -413,7 +413,7 @@ var CLIENTS = {
       },
       "herdr-sidebar": { kind: "full" },
       "herdr-look": { kind: "full" },
-      "tern-decisions": { kind: "unsupported", reason: "Requires omp in Tern." },
+      "omp-decisions": { kind: "unsupported", reason: "Uses omp\u2019s composer." },
       "herdr-open": { kind: "full" },
       "herdr-install": { kind: "full" },
       "status-children": { kind: "full" },
@@ -534,7 +534,7 @@ var CLIENTS = {
         kind: "different",
         reason: "Codex runs no hook when a session ends, so its published file stays."
       },
-      "tern-decisions": { kind: "unsupported", reason: "Requires omp in Tern." },
+      "omp-decisions": { kind: "unsupported", reason: "Uses omp\u2019s composer." },
       "herdr-open": {
         kind: "unsupported",
         reason: "The Codex CLI has no action that opens the inbox. A Codex plugin adds skills, MCP servers and hooks but no slash command, and the Inbox tab shows only in the Codex app. A `$inbox` skill that has the model call an MCP tool could open the Herdr look, but only after a model turn, so the press could not show what it did at once. It is left as an option."
@@ -658,7 +658,7 @@ var CLIENTS = {
       },
       "herdr-sidebar": { kind: "full" },
       "herdr-look": { kind: "full" },
-      "tern-decisions": { kind: "full" },
+      "omp-decisions": { kind: "full" },
       "herdr-open": { kind: "full" },
       "herdr-install": { kind: "full" },
       "status-children": {
@@ -1481,7 +1481,7 @@ var GH_TIMED_OUT_TEXT = `gh did not answer within ${GH_TIMEOUT_MS / 1000} second
 import { existsSync } from "fs";
 import { stat as stat5 } from "fs/promises";
 import { homedir } from "os";
-import { dirname as dirname5, join as join6 } from "path";
+import { dirname as dirname4, join as join5 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 // package.json
 var version = "0.5.0";
@@ -12315,288 +12315,6 @@ function questionHistoryPlace(env, dir) {
   };
 }
 
-// src/tern-control.ts
-import { randomUUID } from "crypto";
-var disconnected = "Inbox disconnected. Press Esc to return to omp.";
-function controlChannel() {
-  const pending = new Map;
-  let send;
-  let ready = Promise.withResolvers();
-  function disconnect() {
-    send = undefined;
-    for (const finish of pending.values())
-      finish();
-    ready = Promise.withResolvers();
-  }
-  return {
-    attach(write) {
-      if (send)
-        disconnect();
-      send = write;
-      ready.resolve();
-      return () => {
-        if (send === write)
-          disconnect();
-      };
-    },
-    disconnect,
-    async connected() {
-      if (send)
-        return;
-      let timer;
-      try {
-        await Promise.race([
-          ready.promise,
-          new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error(disconnected)), 3000);
-          })
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-    request(action) {
-      if (!send)
-        return Promise.reject(new Error(disconnected));
-      const id = randomUUID();
-      const { promise, resolve, reject } = Promise.withResolvers();
-      const finish = (answer) => {
-        clearTimeout(timer);
-        pending.delete(id);
-        if (!answer || answer.error)
-          reject(new Error(answer?.error || disconnected));
-        else
-          resolve(answer.value);
-      };
-      const timer = setTimeout(finish, 3000);
-      pending.set(id, finish);
-      try {
-        send(`event: control
-data: ` + JSON.stringify({ id, ...action }) + `
-
-`);
-      } catch {
-        disconnect();
-      }
-      return promise;
-    },
-    answer(body) {
-      if (!body || typeof body !== "object" || !("id" in body) || typeof body.id !== "string")
-        throw new Error("Invalid command response.");
-      pending.get(body.id)?.({
-        value: "value" in body ? body.value : undefined,
-        error: "error" in body && typeof body.error === "string" ? body.error : undefined
-      });
-    }
-  };
-}
-function inboxKeyboard(page, redraw, done, parse, editorFor, fit) {
-  let editor;
-  let editing;
-  let opening;
-  let saving;
-  let stopped = false;
-  let notice = "";
-  const hint = "Inbox \xB7 Esc back \xB7 j/k questions \xB7 1\u20139 select \xB7 i write \xB7 ? keys";
-  function failed(error) {
-    if (stopped)
-      return;
-    notice = error instanceof Error ? error.message : String(error);
-    redraw();
-  }
-  function saveDraft() {
-    if (!editor || !editing || saving)
-      return;
-    saving = [];
-    const value = editor.getExpandedText();
-    (value === editing.value ? Promise.resolve() : page.request({ key: "write", draft: { ...editing, value } })).then(() => {
-      editor = undefined;
-      editing = undefined;
-      notice = "";
-      const buffered = saving ?? [];
-      saving = undefined;
-      for (const data of buffered)
-        input(data);
-    }).catch(failed).finally(() => {
-      saving = undefined;
-      if (!stopped)
-        redraw();
-    });
-  }
-  function input(raw) {
-    if (stopped)
-      return;
-    const key = parse(raw);
-    const waiting = opening ?? saving;
-    if (waiting) {
-      if (waiting.length < 256)
-        waiting.push(raw);
-      return;
-    }
-    if (editor) {
-      if (key === "escape")
-        saveDraft();
-      else if (key === "ctrl+g") {
-        editor = undefined;
-        editing = undefined;
-        notice = "";
-        redraw();
-      } else {
-        if (key === "enter")
-          editor.insertText(`
-`);
-        else
-          editor.handleInput(raw);
-        redraw();
-      }
-      return;
-    }
-    if (key === "escape" || key === "q" || key === "ctrl+alt+i") {
-      done();
-      return;
-    }
-    if (key === "i") {
-      opening = [];
-      page.request({ key: "read" }).then((value) => {
-        if (stopped)
-          return;
-        const draft = value;
-        if (!draft || typeof draft.id !== "string" || typeof draft.revision !== "string" || typeof draft.value !== "string")
-          throw new Error("No open question to write a reply to.");
-        editing = draft;
-        editor = editorFor();
-        editor.focused = true;
-        editor.setText(draft.value);
-        const buffered = opening ?? [];
-        opening = undefined;
-        notice = "";
-        for (const data of buffered)
-          input(data);
-        redraw();
-      }).catch((error) => {
-        opening = undefined;
-        failed(error);
-      });
-      return;
-    }
-    if (key && /^(?:[jkhlx?1-9]|shift\+\?|space|enter|shift\+enter)$/.test(key)) {
-      notice = "";
-      page.request({ key: key === "shift+?" ? "?" : key }).catch(failed);
-    }
-  }
-  return {
-    render: (width) => [
-      fit(editor ? "Inbox \xB7 Esc keep \xB7 Ctrl+G cancel" : width < 45 ? "Inbox \xB7 Esc back \xB7 ? keys" : hint, width),
-      ...notice ? [fit(notice, width)] : [],
-      ...editor ? editor.render(width) : []
-    ],
-    handleInput: input,
-    invalidate: () => {},
-    dispose: () => {
-      stopped = true;
-    }
-  };
-}
-
-// src/tern-theme.ts
-import { watch } from "fs";
-import { dirname as dirname2, join as join3 } from "path";
-import { readFile as readFile3 } from "fs/promises";
-function palette(theme, file, resolve) {
-  const hex = (key) => {
-    const raw = file?.terminal?.[key];
-    return raw !== undefined && raw !== "" && resolve?.(raw, file?.vars ?? {}) || undefined;
-  };
-  return {
-    scheme: theme.isLight ? "light" : "dark",
-    bg: hex("background") ?? theme.getBgHex("userMessageBg"),
-    fg: hex("foreground") ?? theme.getColorHex("text"),
-    card: hex("widget") ?? theme.getBgHex("toolPendingBg"),
-    chrome: hex("chrome") ?? theme.getBgHex("statusLineBg"),
-    wash: theme.getBgHex("selectedBg"),
-    soft: theme.getColorHex("muted"),
-    line: theme.getColorHex("borderMuted"),
-    accent: theme.getColorHex("accent"),
-    size: 14,
-    font: ""
-  };
-}
-function watchTernTheme(publish, run, cwd, api, files, colors) {
-  let live = true, generation = 0, current, watcher, config;
-  let debounce;
-  async function refresh() {
-    const request = ++generation;
-    let next = current && palette(current);
-    try {
-      const state = await run(["tern", "ctl", "state"], { cwd, timeoutMs: 2200 });
-      if (state.code !== 0)
-        return;
-      const window = JSON.parse(state.stdout);
-      const name = window.theme_preview || (window.theme === "light" ? window.theme_light : window.theme_dark);
-      if (!name)
-        return;
-      const chosen = await api.getThemeByName(name);
-      if (!chosen)
-        return;
-      next = palette(chosen, files.loadThemeJsonSync(name), (value, vars) => {
-        const v = colors.resolveVarRefs(value, vars);
-        return typeof v === "number" ? colors.ansi256ToHex(v) : v;
-      });
-      next.scheme = window.theme;
-      if (config) {
-        const settings = await readFile3(join3(config, "settings.json"), "utf8").then(JSON.parse).catch(() => {
-          return;
-        });
-        if (typeof settings?.ui_font === "string" && settings.ui_font.trim())
-          next.font = settings.ui_font + ", system-ui, sans-serif";
-      }
-      if (window.ui_font && window.ui_font >= 8 && window.ui_font <= 56)
-        next.size = window.ui_font;
-    } catch {} finally {
-      if (live && request === generation && next)
-        publish(next);
-    }
-  }
-  const schedule = () => {
-    if (!live)
-      return;
-    clearTimeout(debounce);
-    debounce = setTimeout(() => void refresh(), 50);
-  };
-  const unsubscribe = api.bindTheme((theme) => {
-    current = theme;
-    if (!generation && theme)
-      publish(palette(theme));
-    schedule();
-  });
-  (async () => {
-    const known = process.env.TERN_CONFIG_DIR;
-    if (known)
-      return known;
-    const reply = await run(["tern", "plugin", "dir"], { cwd, timeoutMs: 2200 });
-    return reply.code === 0 && reply.stdout.trim() ? dirname2(reply.stdout.trim()) : undefined;
-  })().then((dir) => {
-    if (!dir || !live)
-      return;
-    config = dir;
-    schedule();
-    watcher = watch(dir, { persistent: false }, (_event, name) => {
-      if (!name || name === "settings.json")
-        schedule();
-    });
-    watcher.on("error", () => watcher?.close());
-  }).catch(() => {});
-  return {
-    refresh: schedule,
-    stop() {
-      live = false;
-      clearTimeout(debounce);
-      watcher?.close();
-      unsubscribe();
-    }
-  };
-}
-
 // src/host-context.ts
 function isUnattended(ctx) {
   const agent = ctx.agent;
@@ -12604,30 +12322,23 @@ function isUnattended(ctx) {
 }
 var sessionIdOf = (ctx) => ctx.sessionManager.getSessionId();
 
-// src/tern-replies.ts
+// src/decision-replies.ts
 import { createHash } from "crypto";
 function revision(item, last) {
   const sent = last?.delivery?.state === "failed" ? null : last?.at;
   return createHash("sha256").update(JSON.stringify([item, sent ?? null])).digest("hex");
 }
-function decisionView(s) {
-  return {
-    questions: s.ledger.items.filter((i) => i.kind === "question").map((i) => ({
-      id: i.id,
-      ask: i.ask,
-      options: i.options,
-      rec: i.rec,
-      reason: i.recReason,
-      context: i.context,
-      descriptions: i.optionDescriptions,
-      revision: revision(i, s.lastActions[i.id])
-    })),
-    focus: s.ledger.overview?.head?.title,
-    tasks: s.ledger.items.filter((i) => i.kind === "task").map((i) => i.ask),
-    findings: s.ledger.findings.map((f) => f.title),
-    prs: s.ledger.prs,
-    stale: s.presence.ledgerState !== "current"
-  };
+function questionsOf(s) {
+  return s.ledger.items.filter((i) => i.kind === "question").map((i) => ({
+    id: i.id,
+    ask: i.ask,
+    options: i.options,
+    rec: i.rec,
+    reason: i.recReason,
+    context: i.context,
+    descriptions: i.optionDescriptions,
+    revision: revision(i, s.lastActions[i.id])
+  }));
 }
 function isReply(value) {
   if (!value || typeof value !== "object")
@@ -12717,910 +12428,341 @@ async function sendReplies(host, input) {
     throw new Error("Delivery unconfirmed. Check the conversation before retrying.");
 }
 
-// src/tern-server.ts
-import { randomUUID as randomUUID2 } from "crypto";
-
-// ui/decisions.html
-var decisions_default = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Inbox \xB7 omp</title>
-    <style>
-      /* decision styles */
-    </style>
-  </head>
-  <body>
-    <main>
-      <header>
-        <h1>Inbox</h1>
-        <p id="focus"></p>
-        <details id="keys">
-          <summary>Keyboard shortcuts <kbd>?</kbd></summary>
-          <p>From omp, <kbd>Ctrl Alt I</kbd> controls the inbox from the prompt. <kbd>q</kbd> returns to omp.</p>
-          <p>
-            <kbd>j k</kbd> move between questions. <kbd>h l</kbd> move between choices. <kbd>Space</kbd> selects a
-            choice, or press its number.
-          </p>
-          <p>
-            <kbd>i</kbd> writes a reply. <kbd>Esc</kbd> keeps your draft. In the omp editor, <kbd>Ctrl G</kbd> cancels
-            the edit. <kbd>x</kbd> clears the current reply.
-          </p>
-          <p><kbd>Enter</kbd> sends the current reply. <kbd>Shift Enter</kbd> sends all selected replies.</p>
-        </details>
-      </header>
-      <p id="empty" role="status">Connecting to omp\u2026</p>
-      <section id="questions" aria-label="Open questions"></section>
-      <details id="other">
-        <summary>Session details</summary>
-        <div id="context"></div>
-        <p>Open <code>/inbox full</code> in omp for all actions.</p>
-      </details>
-    </main>
-    <footer>
-      <div>
-        <span id="count">Connecting\u2026</span><button class="primary" id="batch" disabled>Send replies</button>
-        <p id="notice" role="status"></p>
-      </div>
-    </footer>
-    <script>
-      'use strict'
-      const byId = id => document.getElementById(id)
-      const el = (tag, text) => {
-        const node = document.createElement(tag)
-        if (text !== undefined) node.textContent = text
-        return node
-      }
-      let view = { questions: [] },
-        online = false,
-        sending = false
-      let drafts = {}
-      const storageKey = 'inbox:' + location.pathname
-      try {
-        drafts = JSON.parse(sessionStorage.getItem(storageKey)) || {}
-      } catch {}
-      function save() {
-        try {
-          sessionStorage.setItem(storageKey, JSON.stringify(drafts))
-        } catch {}
-      }
-      const cards = new Map()
-      let activeId,
-        choice = 0
-      function point(id, index, focus = false) {
-        const last = cards.get(activeId)
-        if (last) {
-          delete last.node.dataset.active
-          last.node.querySelector('[data-cursor]')?.removeAttribute('data-cursor')
-        }
-        const changed = activeId !== id
-        activeId = id
-        const card = cards.get(id)
-        if (!card) return
-        const staged = card.options.findIndex(radio => radio.checked)
-        choice = Math.max(0, Math.min(card.options.length - 1, index ?? (changed ? Math.max(0, staged) : choice)))
-        card.node.dataset.active = ''
-        const label = card.options[choice]?.parentElement
-        if (label) label.dataset.cursor = ''
-        if (focus) {
-          card.node.focus({ preventScroll: true })
-          const destination = index === undefined ? card.title : label || card.title
-          destination.scrollIntoView({ block: 'nearest' })
-        }
-      }
-      function controls() {
-        const n = view.questions.filter(q => drafts[q.id]?.revision === q.revision && drafts[q.id].value.trim()).length
-        byId('count').textContent = !online
-          ? 'Disconnected \xB7 reconnecting\u2026'
-          : n
-            ? n + ' selected'
-            : 'No replies selected'
-        byId('batch').textContent = sending ? 'Sending\u2026' : n > 1 ? 'Send ' + n + ' together' : 'Send reply'
-        byId('batch').disabled = !online || sending || !n
-        for (const [id, card] of cards) {
-          card.one.disabled = !online || sending || drafts[id]?.revision !== card.revision || !drafts[id]?.value.trim()
-          card.clear.disabled = sending || !drafts[id]
-          card.fields.disabled = sending
-        }
-      }
-      function choose(q, kind, value) {
-        if (value) drafts[q.id] = { id: q.id, revision: q.revision, kind, value }
-        else delete drafts[q.id]
-        save()
-        controls()
-      }
-      function cardFor(q) {
-        const node = el('article'),
-          title = el('h2', q.ask)
-        node.tabIndex = -1
-        title.id = 'title-' + q.id
-        node.setAttribute('aria-labelledby', title.id)
-        node.append(title)
-        if (q.context) node.append(el('p', q.context))
-        const fields = el('fieldset')
-        fields.setAttribute('aria-label', q.ask)
-        node.append(fields)
-        const free = el('textarea')
-        free.rows = 1
-        free.maxLength = 16000
-        free.placeholder = 'Write a reply\u2026'
-        free.setAttribute('aria-label', 'Written reply to ' + q.ask)
-        const options = []
-        for (const opt of q.options) {
-          const label = el('label'),
-            radio = el('input'),
-            words = el('span', opt)
-          label.className = 'choice'
-          radio.type = 'radio'
-          radio.name = q.id
-          radio.checked = drafts[q.id]?.kind === 'choice' && drafts[q.id].value === opt
-          radio.onchange = () => {
-            free.value = ''
-            choose(q, 'choice', opt)
-          }
-          if (opt === q.rec) words.append(el('em', ' Recommended'))
-          if (q.descriptions?.[opt]) words.append(el('small', q.descriptions[opt]))
-          if (opt === q.rec && q.reason) words.append(el('small', q.reason))
-          const ordinal = options.length + 1
-          label.append(radio)
-          if (ordinal <= 9) {
-            const key = el('kbd', String(ordinal))
-            key.setAttribute('aria-hidden', 'true')
-            label.append(key)
-          }
-          label.append(words)
-          fields.append(label)
-          options.push(radio)
-        }
-        free.value = drafts[q.id]?.kind === 'text' ? drafts[q.id].value : ''
-        free.oninput = () => {
-          for (const r of options) r.checked = false
-          choose(q, 'text', free.value)
-        }
-        fields.append(free)
-        const actions = el('div'),
-          one = el('button', 'Send this reply'),
-          clear = el('button', 'Clear')
-        actions.className = 'actions'
-        one.onclick = () => send([q.id])
-        clear.onclick = () => {
-          free.value = ''
-          for (const r of options) r.checked = false
-          choose(q, 'text', '')
-        }
-        actions.append(one, clear)
-        node.append(actions)
-        node.addEventListener('focusin', event => {
-          if (event.target === node) return
-          const index = options.indexOf(event.target)
-          point(q.id, index >= 0 ? index : undefined)
-        })
-        return { node, title, free, options, one, clear, fields, revision: q.revision }
-      }
-      function render(next) {
-        const oldIndex = view.questions.findIndex(q => q.id === activeId)
-        const hadFocus = cards.get(activeId)?.node.contains(document.activeElement)
-        view = next
-        if (next.theme) {
-          document.documentElement.style.colorScheme = next.theme.scheme
-          document.documentElement.style.fontSize = next.theme.size + 'px'
-          document.documentElement.style.fontFamily = next.theme.font || ''
-          for (const key of ['bg', 'fg', 'chrome', 'card', 'line', 'soft', 'wash', 'accent'])
-            document.documentElement.style.setProperty('--' + key, next.theme[key])
-        }
-        byId('focus').textContent = next.focus || ''
-        byId('empty').textContent = next.stale
-          ? 'The inbox is catching up. Questions may be out of date.'
-          : next.questions.length
-            ? ''
-            : 'No questions waiting.'
-        byId('empty').hidden = !byId('empty').textContent
-        const questions = byId('questions'),
-          ids = new Set(next.questions.map(q => q.id))
-        for (const [id, card] of cards)
-          if (!ids.has(id)) {
-            card.node.remove()
-            cards.delete(id)
-          }
-        // Keep in-progress typing and focus when another row changes.
-        let previous = null
-        for (const q of next.questions) {
-          let card = cards.get(q.id)
-          if (drafts[q.id] && drafts[q.id].revision !== q.revision && !sending) {
-            delete drafts[q.id]
-            card?.node.remove()
-            card = undefined
-            byId('notice').textContent = 'A question changed. Choose its reply again.'
-          }
-          if (!card || card.revision !== q.revision) {
-            card?.node.remove()
-            card = cardFor(q)
-            cards.set(q.id, card)
-          }
-          const position = previous ? previous.nextSibling : questions.firstChild
-          if (position !== card.node) questions.insertBefore(card.node, position)
-          previous = card.node
-        }
-        const current = cards.has(activeId)
-          ? activeId
-          : next.questions[Math.max(0, Math.min(oldIndex, next.questions.length - 1))]?.id
-        point(current, undefined, hadFocus && document.activeElement === document.body)
-        // Keep a removed row's draft until delivery is acknowledged. A rejected send can reopen it.
-        save()
-        const context = byId('context')
-        context.replaceChildren()
-        for (const [name, values] of [
-          ['Tasks', next.tasks],
-          ['Findings', next.findings],
-          ['Pull requests', next.prs],
-        ]) {
-          if (!values.length) continue
-          const list = el('ul')
-          for (const v of values) list.append(el('li', v))
-          context.append(el('h2', name), list)
-        }
-        controls()
-      }
-      async function send(ids) {
-        if (sending || !online) return
-        const replies = ids
-          .map(id => drafts[id])
-          .filter(r => r && r.value.trim() && view.questions.some(q => q.id === r.id && q.revision === r.revision))
-        if (!replies.length) return
-        sending = true
-        controls()
-        try {
-          const res = await fetch('send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(replies),
-          })
-          if (!res.ok) throw new Error((await res.text()) || 'omp could not accept the replies.')
-          for (const r of replies) {
-            delete drafts[r.id]
-            cards.get(r.id)?.node.remove()
-            cards.delete(r.id)
-          }
-          byId('notice').textContent =
-            replies.length === 1 ? 'Reply sent to omp.' : replies.length + ' replies sent in one message.'
-        } catch (e) {
-          byId('notice').textContent =
-            e instanceof TypeError ? 'Connection interrupted. Check the conversation before sending again.' : e.message
-        } finally {
-          sending = false
-          render(view)
-        }
-      }
-      byId('batch').onclick = () => send(view.questions.map(q => q.id))
-      let returning = false
-      async function returnToOmp() {
-        if (returning) return
-        returning = true
-        try {
-          const res = await fetch('return', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-          })
-          if (!res.ok) throw new Error(await res.text())
-        } catch (error) {
-          byId('notice').textContent = error.message || 'Could not switch to omp.'
-        } finally {
-          returning = false
-        }
-      }
-      function move(key) {
-        const card = cards.get(activeId)
-        if (key === '?') {
-          byId('keys').open = !byId('keys').open
-          if (byId('keys').open) byId('keys').scrollIntoView({ block: 'nearest' })
-          return true
-        }
-        if (!card || sending) return false
-        const i = view.questions.findIndex(q => q.id === activeId)
-        switch (key) {
-          case 'j':
-          case 'k':
-            point(
-              view.questions[Math.max(0, Math.min(i + (key === 'j' ? 1 : -1), view.questions.length - 1))].id,
-              undefined,
-              true,
-            )
-            break
-          case 'h':
-          case 'l':
-            point(activeId, choice + (key === 'l' ? 1 : -1), true)
-            break
-          case 'i':
-            card.free.focus()
-            break
-          case 'x':
-            card.clear.click()
-            break
-          case 'space':
-            card.options[choice]?.click()
-            break
-          case 'enter':
-            card.one.click()
-            break
-          case 'shift+enter':
-            byId('batch').click()
-            break
-          default:
-            if (!/^[1-9]$/.test(key) || !card.options[Number(key) - 1]) return false
-            point(activeId, Number(key) - 1, true)
-            card.options[choice].click()
-        }
-        return true
-      }
-      function press(event) {
-        if (event.defaultPrevented || event.isComposing || event.metaKey || event.altKey || event.ctrlKey) return
-        const key = event.key
-        if (event.target instanceof HTMLTextAreaElement) {
-          if (key === 'Escape') {
-            event.preventDefault()
-            point(activeId, undefined, true)
-          }
-          return
-        }
-        if (key === 'Escape' || key === 'q') {
-          event.preventDefault()
-          if (!event.repeat) void returnToOmp()
-          return
-        }
-        if (event.repeat && !['h', 'j', 'k', 'l'].includes(key)) return
-        if ((key === ' ' || key === 'Enter') && !event.shiftKey && event.target.closest('button,summary,input')) return
-        const command = key === 'Enter' ? (event.shiftKey ? 'shift+enter' : 'enter') : key === ' ' ? 'space' : key
-        if (move(command)) event.preventDefault()
-      }
-      document.addEventListener('keydown', press)
-      const events = new EventSource('events')
-      events.addEventListener('control', async event => {
-        const { id, key, draft } = JSON.parse(event.data)
-        let value, error
-        try {
-          const card = cards.get(activeId)
-          if (key === 'read') {
-            if (!card || sending) throw new Error('No question available to edit.')
-            value = { id: activeId, revision: card.revision, value: card.free.value }
-          } else if (key === 'write') {
-            const target = cards.get(draft.id)
-            if (!target || target.revision !== draft.revision || sending)
-              throw new Error('Question changed. Your text is still in the editor.')
-            if (draft.value.length > target.free.maxLength) throw new Error('Reply exceeds the text field limit.')
-            target.free.value = draft.value
-            target.free.dispatchEvent(new Event('input'))
-          } else {
-            move(key)
-          }
-        } catch (reason) {
-          error = reason.message
-        }
-        await fetch('answer', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, value, error }),
-        }).catch(() => {})
-      })
-      matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () =>
-        fetch('appearance', { method: 'POST', headers: { 'Content-Type': 'application/json' } }).catch(() => {}),
-      )
-      events.onmessage = e => {
-        online = true
-        render(JSON.parse(e.data))
-      }
-      events.onerror = () => {
-        online = false
-        controls()
-      }
-    </script>
-  </body>
-</html>
-`;
-
-// ui/decisions.css
-var decisions_default2 = `:root {
-  color-scheme: light dark;
-  --bg: Canvas;
-  --fg: CanvasText;
-  --soft: GrayText;
-  --line: color-mix(in srgb, CanvasText 23%, Canvas);
-  --card: Canvas;
-  --chrome: Canvas;
-  --accent: AccentColor;
-  --wash: color-mix(in srgb, AccentColor 14%, Canvas);
-  font:
-    14px/1.45 Geist,
-    system-ui,
-    sans-serif;
-}
-* {
-  box-sizing: border-box;
-}
-body {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-}
-main,
-footer > div {
-  max-width: 48rem;
-  margin: auto;
-  padding: 0.95rem 1rem;
-}
-main {
-  width: 100%;
-  padding-bottom: 2rem;
-}
-header {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 0.85rem;
-}
-h1 {
-  font: inherit;
-  font-size: 1.16rem;
-  line-height: 1.3;
-  font-weight: 600;
-  margin: 0;
-}
-h2 {
-  font-weight: 600;
-  font-size: 1rem;
-  line-height: 1.4;
-  margin: 0;
-}
-p {
-  margin: 0.35rem 0;
-  color: var(--soft);
-}
-#focus:empty,
-#notice:empty {
-  display: none;
-}
-article {
-  margin: 0.9rem 0;
-  border-inline-start: 2px solid transparent;
-  padding-inline-start: 0.7rem;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 1rem;
-}
-article[data-active] {
-  border-inline-start-color: var(--accent);
-}
-article:focus {
-  outline: none;
-}
-article[data-active] .choice[data-cursor] {
-  outline: 1px dashed var(--accent);
-  outline-offset: -3px;
-}
-h2,
-.choice,
-textarea {
-  scroll-margin-block: 0.75rem 7rem;
-}
-kbd {
-  font:
-    0.82rem ui-monospace,
-    monospace;
-  color: var(--fg);
-}
-#keys {
-  margin-top: 0.5rem;
-}
-#keys > p {
-  font-size: 0.85rem;
-}
-fieldset {
-  padding: 0;
-  margin: 0.7rem 0;
-  border: 0;
-  min-width: 0;
-}
-.choice {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 0.4rem;
-  padding: 0.55rem 0.65rem;
-  margin: 0.35rem 0;
-  cursor: pointer;
-}
-.choice:has(:checked) {
-  background: var(--wash);
-  border-color: var(--accent);
-}
-input {
-  accent-color: var(--accent);
-}
-small {
-  display: block;
-  color: var(--soft);
-}
-em {
-  font-style: normal;
-  font-weight: 600;
-  color: var(--accent);
-  font-size: 0.76rem;
-  margin-left: 0.45rem;
-}
-textarea {
-  width: 100%;
-  resize: vertical;
-  min-height: 2.45rem;
-  background: var(--card);
-  color: inherit;
-  border: 1px solid var(--line);
-  border-radius: 0.4rem;
-  padding: 0.5rem;
-  font: inherit;
-  display: block;
-  margin: 0.45rem 0;
-}
-button {
-  font: inherit;
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 0.4rem;
-  padding: 0.38rem 0.7rem;
-  cursor: pointer;
-}
-button:disabled {
-  opacity: 0.48;
-  cursor: default;
-}
-button.primary {
-  color: var(--bg);
-  border-color: var(--accent);
-  background: var(--accent);
-  font-weight: 600;
-}
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-details {
-  color: var(--soft);
-}
-summary {
-  cursor: pointer;
-}
-li {
-  margin: 0.3rem 0;
-}
-footer {
-  margin-top: auto;
-  position: sticky;
-  bottom: 0;
-  background: var(--chrome);
-  border-top: 1px solid var(--line);
-}
-footer > div {
-  padding-block: 0.7rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.65rem;
-  flex-wrap: wrap;
-}
-#notice {
-  font-size: 0.87rem;
-  flex-basis: 100%;
-}
-#count {
-  font-size: 0.85rem;
-  color: var(--soft);
-}
-#empty {
-  margin: 1.2rem 0;
-}
-body {
-  overflow-wrap: anywhere;
-}
-`;
-
-// src/tern-server.ts
-var page = String(decisions_default).replace("/* decision styles */", () => String(decisions_default2));
-function serveDecisions(readView, submit, returnToOmp, refreshTheme) {
-  const base = "/" + randomUUID2() + "/";
-  const streams = new Set;
-  const headers = {
-    "cache-control": "no-store",
-    "referrer-policy": "no-referrer",
-    "x-content-type-options": "nosniff",
-    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-  };
-  const keyboard = controlChannel();
-  let data = "";
-  const emit = () => "data: " + data + `
-
-`;
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    maxRequestBodySize: 512 * 1024,
-    async fetch(req, server) {
-      const url = new URL(req.url);
-      if (url.origin !== server.url.origin || !url.pathname.startsWith(base))
-        return new Response(null, { status: 404 });
-      const route = url.pathname.slice(base.length);
-      if (!route && req.method === "GET")
-        return new Response(page, { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
-      if (route === "events" && req.method === "GET") {
-        server.timeout(req, 0);
-        let client;
-        let detach;
-        const stream = new ReadableStream({
-          start(c) {
-            client = c;
-            streams.add(c);
-            data = JSON.stringify(readView());
-            c.enqueue(emit());
-            detach = keyboard.attach((message) => c.enqueue(message));
-          },
-          cancel() {
-            streams.delete(client);
-            detach?.();
-          }
-        });
-        return new Response(stream, { headers: { ...headers, "content-type": "text/event-stream" } });
-      }
-      if (route !== "send" && route !== "return" && route !== "answer" && route !== "appearance" || req.method !== "POST")
-        return new Response(null, { status: 404 });
-      if (req.headers.get("origin") !== server.url.origin || req.headers.get("content-type") !== "application/json")
-        return new Response(null, { status: 403 });
-      try {
-        if (route === "appearance")
-          refreshTheme?.();
-        else if (route === "answer")
-          keyboard.answer(await req.json());
-        else if (route === "return")
-          await returnToOmp();
-        else
-          await submit(await req.json());
-        return new Response(null, { status: 204 });
-      } catch (error) {
-        return new Response(error instanceof Error ? error.message : "omp could not complete the request.", {
-          status: 409,
-          headers
-        });
-      }
-    }
-  });
-  server.unref();
-  return {
-    keyboard,
-    url: new URL(base, server.url).href,
-    update() {
-      if (!streams.size)
-        return;
-      const next = JSON.stringify(readView());
-      if (next === data)
-        return;
-      data = next;
-      for (const c of streams) {
-        try {
-          c.enqueue(emit());
-        } catch {
-          streams.delete(c);
-        }
-      }
-    },
-    stop() {
-      keyboard.disconnect();
-      for (const c of streams)
-        c.close();
-      streams.clear();
-      server.stop(true);
-    }
-  };
-}
-
-// src/tern-pane.ts
-function ternTarget(env) {
-  const id = env.TERN_PANE;
-  if (!env.TERN_PANE_SOCKET || !id || !/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || env.OMP_INBOX_TERN === "off")
-    return null;
-  return { owner: Number(id), auto: env.OMP_INBOX_TERN !== "manual" };
-}
-function ternPane(target, run, cwd, host, notify, watchTheme) {
-  let page;
-  let opening;
-  const lifetime = new AbortController;
-  let stopped = false;
-  let tried = false;
-  let focusRequested = false;
-  let latest;
-  let theme;
-  let subscription;
-  let observing;
-  function observe() {
-    if (!watchTheme || observing)
+// src/decision-session.ts
+class DecisionSession {
+  host;
+  questions = [];
+  index = 0;
+  choice = 0;
+  drafts = new Map;
+  busy = false;
+  open = false;
+  notice = "";
+  changedDraft = false;
+  listeners = new Set;
+  lifetime = new AbortController;
+  constructor(host) {
+    this.host = host;
+  }
+  get current() {
+    return this.questions[this.index];
+  }
+  subscribe(fn) {
+    this.listeners.add(fn);
+    return () => void this.listeners.delete(fn);
+  }
+  redraw() {
+    for (const fn of this.listeners)
+      fn();
+  }
+  saved(state) {
+    const rows = questionsOf(state);
+    if (rows.length === this.questions.length && rows.every((q, i) => q.revision === this.questions[i]?.revision))
       return;
-    observing = watchTheme((next) => {
-      if (stopped)
-        return;
-      theme = next;
-      page?.update();
-    }, run, cwd).then((sub) => {
-      if (stopped)
-        sub.stop();
+    const previous = this.current;
+    this.questions = rows;
+    const retained = rows.findIndex((q) => q.id === previous?.id);
+    this.index = retained >= 0 ? retained : Math.max(0, Math.min(this.index, rows.length - 1));
+    if (this.current?.revision !== previous?.revision)
+      this.choice = 0;
+    if (!this.busy && this.prune())
+      this.notice = "A staged question changed. Review remaining replies.";
+    this.redraw();
+  }
+  prune() {
+    let removed = false;
+    for (const [id, draft] of this.drafts) {
+      if (this.questions.some((q) => q.id === id && q.revision === draft.revision))
+        continue;
+      this.drafts.delete(id);
+      this.changedDraft = true;
+      removed = true;
+    }
+    return removed;
+  }
+  move(by) {
+    if (!this.questions.length)
+      return;
+    this.index = (this.index + by + this.questions.length) % this.questions.length;
+    const q = this.current;
+    const draft = this.drafts.get(q.id);
+    this.choice = Math.max(0, draft?.kind === "choice" ? q.options.indexOf(draft.value) : 0);
+    this.redraw();
+  }
+  stage(q, kind, value) {
+    if (this.busy)
+      return false;
+    if (this.current?.revision !== q.revision) {
+      this.notice = "Question changed. Review it before answering.";
+    } else if (value.length > 16000) {
+      this.notice = "Reply exceeds 16,000 characters.";
+    } else {
+      if (value.trim())
+        this.drafts.set(q.id, { id: q.id, revision: q.revision, kind, value });
       else
-        subscription = sub;
-    }).catch(() => {});
-  }
-  async function focusBlock(id) {
-    if (stopped)
-      throw new Error("This omp session has ended.");
-    const result = await run(["tern", "focus", String(id)], { cwd, timeoutMs: 5000 });
-    if (result.code !== 0)
-      throw new Error("Tern could not switch panes.");
-  }
-  async function browser(op) {
-    const response = await run(["tern", "browser", JSON.stringify(op), "--timeout", "12"], { cwd, timeoutMs: 14000 });
-    if (response.code !== 0)
-      throw new Error("Tern could not open the inbox. Use /inbox full, or retry /inbox.");
-    const result = JSON.parse(response.stdout);
-    if (!result.ok)
-      throw new Error("Tern did not acknowledge the browser operation.");
-    return result.ok;
-  }
-  async function existing(url) {
-    const result = await browser({ op: "blocks" });
-    const blocks = result.blocks;
-    return blocks.find((b) => b.url === url)?.block;
-  }
-  async function focused() {
-    const reply = await run(["tern", "ls", "--json"], { cwd, timeoutMs: 5000 });
-    if (reply.code !== 0)
-      return;
-    const layout = JSON.parse(reply.stdout);
-    return layout.sessions.find((s) => s.shown)?.tabs.find((t) => t.shown)?.blocks.find((b) => b.focused)?.id;
-  }
-  async function launch() {
-    const state = latest ?? await host.read();
-    observe();
-    await observing;
-    if (stopped)
-      return;
-    page ??= serveDecisions(() => ({ ...decisionView(latest ?? state), theme }), (replies) => {
-      if (stopped)
-        throw new Error("This omp session has ended.");
-      return sendReplies(host, replies);
-    }, () => focusBlock(target.owner), () => subscription?.refresh());
-    const { url } = page;
-    const found = await existing(url);
-    if (stopped)
-      return;
-    if (found !== undefined) {
-      if (focusRequested)
-        await focusBlock(found);
-      return;
+        this.drafts.delete(q.id);
+      this.notice = "";
+      this.redraw();
+      return true;
     }
-    const previous = focusRequested ? undefined : await focused().catch(() => {
-      return;
-    });
-    if (stopped)
-      return;
-    const { block } = await browser({ op: "open", owner: target.owner, url, how: "beside" });
-    if (typeof block !== "number")
-      throw new Error("Tern did not return an inbox block.");
-    if (stopped)
-      await browser({ op: "close", block });
-    else {
-      await browser({ op: "release", block });
-      if (previous === undefined || focusRequested || stopped)
-        return;
-      const current = await focused().catch(() => {
-        return;
-      });
-      if (current === block && !focusRequested && !stopped)
-        await run(["tern", "focus", String(previous)], { cwd, timeoutMs: 5000 });
-    }
+    this.redraw();
+    return false;
   }
-  function open(focus = true) {
-    tried = true;
-    if (!opening || focus)
-      focusRequested = focus;
-    opening ??= launch().finally(() => {
-      opening = undefined;
-    });
-    return opening;
-  }
-  return {
-    open,
-    async keyboard() {
-      await open(false);
-      if (stopped || !page)
-        throw new Error("The omp session changed.");
-      await page.keyboard.connected();
-      return { request: page.keyboard.request, signal: lifetime.signal };
-    },
-    saved(state) {
-      if (stopped)
-        return;
-      latest = state;
-      page?.update();
-      if (target.auto && !tried && state.ledger.items.some((i) => i.kind === "question"))
-        open(false).catch((err) => {
-          if (!stopped)
-            notify(String(err instanceof Error ? err.message : err));
-        });
-    },
-    stop() {
-      stopped = true;
-      lifetime.abort();
-      subscription?.stop();
-      if (!page)
-        return;
-      const { url } = page;
-      page.stop();
-      return existing(url).then((block) => block === undefined ? undefined : browser({ op: "close", block })).catch(() => {});
+  async send(all) {
+    if (this.busy || this.lifetime.signal.aborted)
+      return;
+    const selected = (all ? this.questions : this.current ? [this.current] : []).flatMap((q) => this.drafts.get(q.id) ?? []);
+    if (all && this.changedDraft) {
+      this.changedDraft = false;
+      this.notice = "Staged set changed. Review, then send again.";
+    } else if (!selected.length) {
+      this.notice = "Stage a reply first.";
+    } else {
+      this.busy = true;
+      this.notice = "Sending\u2026";
+      this.redraw();
+      try {
+        await sendReplies(this.host, selected);
+        for (const r of selected)
+          this.drafts.delete(r.id);
+        this.notice = selected.length === 1 ? "Sent reply." : `Sent ${selected.length} replies together.`;
+      } catch (error) {
+        this.notice = error instanceof Error ? error.message : String(error);
+      } finally {
+        this.busy = false;
+        this.prune();
+      }
     }
-  };
+    this.redraw();
+  }
 }
-function ternSessions(target, run, sessions, watchTheme) {
+function decisionSessions(hostFor) {
   let active;
+  function start(ctx) {
+    if (ctx.mode !== "tui" || isUnattended(ctx))
+      return;
+    const id = sessionIdOf(ctx);
+    if (active?.id === id)
+      return active.review;
+    active?.review.lifetime.abort();
+    const host = hostFor(ctx);
+    const review = new DecisionSession({
+      ...host,
+      deliver: (s, text, key) => active?.review === review && sessionIdOf(ctx) === id ? host.deliver(s, text, key) : Promise.resolve({ state: "rejected", reason: "The omp session changed." })
+    });
+    active = { id, review, sawSave: false };
+    host.read().then((s) => {
+      if (active?.review === review && !active.sawSave)
+        review.saved(s);
+    }).catch(() => {});
+    return review;
+  }
   return {
-    start(ctx) {
-      if (!target || isUnattended(ctx) || ctx.mode !== "tui")
-        return;
-      const id = sessionIdOf(ctx);
-      if (active?.id === id)
-        return;
-      active?.panel.stop();
-      const host = sessions.hostFor(ctx);
-      const panel = ternPane(target, run, ctx.cwd, {
-        ...host,
-        deliver: (s, text, key) => active?.panel === panel && sessionIdOf(ctx) === id ? host.deliver(s, text, key) : Promise.resolve({ state: "rejected", reason: "The omp session changed." })
-      }, (message) => ctx.ui.notify(message, "warning"), watchTheme);
-      active = { id, panel, sawSave: false };
-      host.read().then((state) => {
-        if (active?.panel === panel && !active.sawSave)
-          panel.saved(state);
-      }).catch(() => {});
+    start,
+    get(ctx) {
+      return active?.id === sessionIdOf(ctx) ? active.review : undefined;
     },
-    saved(id, state) {
+    saved(id, s) {
       if (active?.id !== id)
         return;
       active.sawSave = true;
-      active.panel.saved(state);
-    },
-    async keyboard(ctx) {
-      if (ctx.mode !== "tui" || active?.id !== sessionIdOf(ctx))
-        return;
-      return active.panel.keyboard();
-    },
-    async open(ctx) {
-      if (ctx.mode !== "tui" || active?.id !== sessionIdOf(ctx))
-        return false;
-      try {
-        await active.panel.open();
-        return true;
-      } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
-        return false;
-      }
+      active.review.saved(s);
     },
     stop(ctx) {
       if (isUnattended(ctx) || active?.id !== sessionIdOf(ctx))
         return;
-      const closing = active.panel.stop();
+      active.review.lifetime.abort();
       active = undefined;
-      return closing;
     }
+  };
+}
+
+// src/decision-view.ts
+var clean = (text) => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim();
+var node = (line) => ({
+  k: "text",
+  key: line.action,
+  p: {
+    spans: [{ t: clean(line.text), s: line.tone }],
+    lines: line.lines ?? 1,
+    wrap: line.lines ? "word" : "none",
+    truncate: "end",
+    ...line.action && { actions: { click: line.action } }
+  }
+});
+function summaryLine(review, width) {
+  const n = review.questions.length;
+  const count = width < 45 ? `${n} ask${n === 1 ? "" : "s"}` : `${n} question${n === 1 ? "" : "s"}`;
+  const staged = review.drafts.size ? ` \xB7 ${review.drafts.size} staged` : "";
+  const hint = width < 60 ? "/inbox" : "Ctrl+Alt+I";
+  return `${count}${staged} \xB7 ${hint} \xB7 ${clean(review.current?.ask ?? "")}`;
+}
+var summaryNode = (review, cols) => node({
+  text: summaryLine(review, cols),
+  tone: "accent"
+});
+var keys = [
+  "j/k   Next / previous question",
+  "h/l   Move between choices",
+  "Space or 1\u20139   Stage choice",
+  "i   Write reply \xB7 x   Clear",
+  "v   Read the full question and choices",
+  "Enter   Send current reply",
+  "s or Shift+Enter   Send staged",
+  "q or Esc   Return to prompt"
+];
+function answerComponent(review, redraw, done, parse, editorFor, style, wrap) {
+  let edit;
+  let detail;
+  let help = false;
+  const stop = review.subscribe(redraw);
+  function lines(width) {
+    const q = review.current;
+    if (help)
+      return [...keys, "?   Close help"].map((text) => ({ text }));
+    if (detail && detail.revision !== q?.revision)
+      detail = undefined;
+    if (q && detail) {
+      const paragraphs = [
+        q.ask,
+        q.context,
+        ...q.options.flatMap((opt, i) => [`${i + 1}. ${opt}${opt === q.rec ? " \u2605" : ""}`, q.descriptions?.[opt]]),
+        q.reason
+      ];
+      const full = paragraphs.filter((p) => !!p).flatMap((p) => wrap(clean(p), Math.max(1, width)));
+      const page = 5;
+      detail.offset = Math.max(0, Math.min(detail.offset, full.length - page));
+      return [
+        ...full.slice(detail.offset, detail.offset + page).map((text) => ({ text })),
+        { text: "j/k scroll \xB7 v back", tone: "muted" }
+      ];
+    }
+    const rows = [];
+    if (edit) {
+      rows.push({ text: edit.question.ask, tone: "strong", lines: 2 }, { text: "Esc keep \xB7 Ctrl+G cancel", tone: "muted" });
+    } else if (q) {
+      rows.push({
+        text: `Question ${review.index + 1}/${review.questions.length} \xB7 ${review.drafts.size} staged`,
+        tone: "muted"
+      });
+      rows.push({ text: q.ask, tone: "strong", lines: 3 });
+      const draft = review.drafts.get(q.id);
+      const first = Math.max(0, Math.min(review.choice - 1, q.options.length - 3));
+      for (let i = first;i < Math.min(q.options.length, first + 3); i++) {
+        const option = q.options[i];
+        const staged = draft?.kind === "choice" && draft.value === option;
+        rows.push({
+          text: `${i === review.choice ? "\u203A" : "\xB7"} ${i + 1} ${staged ? "\u2713 " : ""}${option}${option === q.rec ? " \u2605" : ""}`,
+          tone: i === review.choice ? "accent" : undefined,
+          action: `stage-${q.revision}-${i}`
+        });
+      }
+      const selected = q.options[review.choice];
+      const detail = draft?.kind === "text" ? `\u2713 ${draft.value}` : selected && q.descriptions?.[selected] || selected === q.rec && q.reason || q.context;
+      if (detail)
+        rows.push({ text: detail, tone: "muted", lines: 2 });
+      rows.push({
+        text: width < 45 ? "i write \xB7 s send staged \xB7 ? keys" : "1\u20139 stage \xB7 i write \xB7 Enter send \xB7 s send staged \xB7 ? keys",
+        tone: "muted"
+      });
+    } else {
+      rows.push({ text: "No open questions." }, { text: "Esc back \xB7 /inbox full for all items", tone: "muted" });
+    }
+    if (review.notice)
+      rows.push({ text: review.notice, tone: "accent", lines: 2 });
+    return rows;
+  }
+  function choose(q, i) {
+    if (review.busy || !q.options[i])
+      return;
+    review.choice = i;
+    review.stage(q, "choice", q.options[i]);
+  }
+  function input(raw) {
+    if (review.lifetime.signal.aborted)
+      return;
+    const key = parse(raw);
+    if (edit) {
+      if (key === "escape" || key === "ctrl+g") {
+        const old = edit;
+        const value = old.editor.getExpandedText();
+        if (key === "ctrl+g" || value === old.initial || review.stage(old.question, "text", value) || old.question.revision !== review.current?.revision)
+          edit = undefined;
+      } else if (key === "enter")
+        edit.editor.insertText(`
+`);
+      else
+        edit.editor.handleInput(raw);
+    } else if (detail && detail.revision === review.current?.revision) {
+      if (key === "j" || key === "k")
+        detail.offset += key === "j" ? 1 : -1;
+      else if (key === "v" || key === "escape")
+        detail = undefined;
+      else if (key === "q")
+        done();
+    } else if (help) {
+      help = false;
+    } else if (key === "escape" || key === "q" || key === "ctrl+alt+i") {
+      done();
+      return;
+    } else if (key === "?" || key === "shift+?")
+      help = true;
+    else if (key === "j" || key === "k")
+      review.move(key === "j" ? 1 : -1);
+    else if (key === "enter" || key === "s" || key === "shift+enter")
+      review.send(key !== "enter");
+    else if (review.current && !review.busy) {
+      const q = review.current;
+      if (key === "v")
+        detail = { revision: q.revision, offset: 0 };
+      else if (key === "h" || key === "l")
+        review.choice = Math.max(0, Math.min(q.options.length - 1, review.choice + (key === "l" ? 1 : -1)));
+      else if (key === "space")
+        choose(q, review.choice);
+      else if (key && /^[1-9]$/.test(key))
+        choose(q, Number(key) - 1);
+      else if (key === "x")
+        review.stage(q, "text", "");
+      else if (key === "i") {
+        const editor = editorFor();
+        const draft = review.drafts.get(q.id);
+        const initial = draft?.kind === "text" ? draft.value : "";
+        editor.setText(initial);
+        editor.focused = true;
+        edit = { question: q, editor, initial };
+      }
+    }
+    redraw();
+  }
+  return {
+    handleInput: input,
+    handleNativeEvent(event) {
+      if (event.type !== "action" || !review.current || edit || help || detail || review.lifetime.signal.aborted)
+        return;
+      const match = /^stage-([a-f0-9]+)-(\d+)$/.exec(event.act);
+      if (match?.[1] === review.current.revision)
+        choose(review.current, Number(match[2]));
+    },
+    render(width) {
+      width = Math.max(1, width);
+      const rows = lines(width).flatMap((line) => {
+        const text = clean(line.text);
+        const parts = line.lines ? wrap(text, width) : [text];
+        const limit = line.lines ?? 1;
+        return parts.slice(0, limit).map((p, i) => {
+          const value = fit(p + (i === limit - 1 && parts.length > limit ? "\u2026" : ""), width);
+          return line.tone === "strong" ? style.bold(value) : line.tone === "muted" ? style.dim(value) : line.tone === "accent" ? style.tone("accent", value) : value;
+        });
+      });
+      return [...rows, ...edit?.editor.render(width) ?? []];
+    },
+    describe({ cols }) {
+      return { k: "col", p: { role: "inbox.questions" }, c: [...lines(cols).map(node), ...edit ? [edit.editor] : []] };
+    },
+    invalidate() {
+      edit?.editor.invalidate?.();
+    },
+    dispose: stop
   };
 }
 
@@ -14393,9 +13535,9 @@ function activityHandlers(context, sessions) {
 }
 
 // src/host-presses.ts
-import { watch as watch2 } from "fs";
-import { appendFile, lstat, mkdir as mkdir3, readdir as readdir3, readFile as readFile4, rename as rename3, rm, stat as stat4, writeFile as writeFile3 } from "fs/promises";
-import { dirname as dirname3, join as join4 } from "path";
+import { watch } from "fs";
+import { appendFile, lstat, mkdir as mkdir3, readdir as readdir3, readFile as readFile3, rename as rename3, rm, stat as stat4, writeFile as writeFile3 } from "fs/promises";
+import { dirname as dirname2, join as join3 } from "path";
 import { fileURLToPath } from "url";
 
 // ../hooks/herdr-press-file.ts
@@ -15123,7 +14265,7 @@ async function startInHerdrApp(run, files, target, bundledFolder, now, log) {
 // src/host-presses.ts
 var HERDR_LOG_BYTES = 64 * 1024;
 function herdrLog(dir) {
-  const path = join4(dir, "herdr.log");
+  const path = join3(dir, "herdr.log");
   return (text) => void (async () => {
     const size = await stat4(path).then((s) => s.size, () => 0);
     const line = `${new Date().toISOString()} ${text}
@@ -15140,16 +14282,16 @@ var pressFiles = {
     const problem = pressFileProblem(await stat4(path));
     if (problem)
       throw new Error(problem);
-    return readFile4(path, "utf8");
+    return readFile3(path, "utf8");
   },
   move: (from, to) => rename3(from, to),
   remove: (path) => rm(path, { force: true })
 };
 var startFiles = {
   kind: (path) => lstat(path).then((s) => s.isSymbolicLink() ? "link" : s.isDirectory() ? "folder" : s.isFile() ? "file" : "other", () => null),
-  read: (path) => readFile4(path, "utf8"),
+  read: (path) => readFile3(path, "utf8"),
   write: async (path, text) => {
-    await mkdir3(dirname3(path), { recursive: true });
+    await mkdir3(dirname2(path), { recursive: true });
     await writeFile3(path, text);
   },
   makeFolder: async (path) => void await mkdir3(path, { recursive: true }),
@@ -15163,7 +14305,7 @@ async function startOmpInHerdrApp(target, run, log) {
     return null;
   return startInHerdrApp(run, startFiles, target, bundledHerdrMod(), Date.now(), log);
 }
-var bundledHerdrMod = () => join4(dirname3(fileURLToPath(import.meta.url)), "herdr-mod");
+var bundledHerdrMod = () => join3(dirname2(fileURLToPath(import.meta.url)), "herdr-mod");
 var message4 = (err) => err instanceof Error ? err.message : String(err);
 function ompPresses(target, apply, log) {
   let stopFollowing = null;
@@ -15184,7 +14326,7 @@ function ompPresses(target, apply, log) {
       } catch (err) {
         return log(`Herdr presses not read: ${message4(err)}`);
       }
-      const drain = pressDrainer(pressFiles, (sessionId) => isPublishedHere((path) => readFile4(path, "utf8"), appHome, sessionId, "omp", terminal), async (_id, file) => {
+      const drain = pressDrainer(pressFiles, (sessionId) => isPublishedHere((path) => readFile3(path, "utf8"), appHome, sessionId, "omp", terminal), async (_id, file) => {
         await apply(ctx, file);
         return true;
       }, log);
@@ -15194,7 +14336,7 @@ function ompPresses(target, apply, log) {
         mkdir3(folder, { recursive: true }).then(() => {
           if (isStopped)
             return;
-          watcher = watch2(folder, () => wake());
+          watcher = watch(folder, () => wake());
           watcher.on("error", (err) => log(`Herdr presses not watched: ${message4(err)}`));
           wake();
         }).catch((err) => log(`Herdr presses not watched: ${message4(err)}`));
@@ -15368,7 +14510,7 @@ function panelCalls(context, sessions, herdrAsk) {
   });
   return { inbox, liveSource };
 }
-function bandWidget(ctx, inbox, tui, style, now, shortcut) {
+function bandWidget(ctx, inbox, tui, style, now, review) {
   let screen = null;
   const refresh = () => inbox.screen(ctx).then((next) => {
     screen = next;
@@ -15381,16 +14523,28 @@ function bandWidget(ctx, inbox, tui, style, now, shortcut) {
   });
   refresh();
   const stop = inbox.onChange(ctx, () => void refresh());
+  const unsubscribe = review?.subscribe(() => tui.requestRender());
   return {
-    render: (width) => screen ? bandLines(screen, width, now(), style, shortcut) : [],
+    describe: ({ cols }) => review && !review.open && review.current && !screen?.stop ? summaryNode(review, cols) : null,
+    render: (width) => {
+      const band = screen ? bandLines(screen, width, now(), style, "/inbox full to open ") : [];
+      if (review?.open)
+        return band.slice(1);
+      if (!review?.current)
+        return band;
+      return [fit(style.tone("accent", summaryLine(review, width)), width), ...band.slice(1)];
+    },
     invalidate: () => {},
-    dispose: stop
+    dispose() {
+      stop();
+      unsubscribe?.();
+    }
   };
 }
 
 // src/host-sessions.ts
 import { mkdir as mkdir4, readdir as readdir4, rename as rename4, rm as rm2, rmdir, writeFile as writeFile4 } from "fs/promises";
-import { dirname as dirname4, join as join5 } from "path";
+import { dirname as dirname3, join as join4 } from "path";
 
 // ../hooks/conversation.ts
 var NL7 = `
@@ -15432,7 +14586,7 @@ function sessionIdInFile(file) {
 }
 var publishFiles = {
   write: async (path, text) => {
-    await mkdir4(dirname4(path), { recursive: true });
+    await mkdir4(dirname3(path), { recursive: true });
     await writeFile4(path, text);
   },
   move: (from, to) => rename4(from, to),
@@ -15441,7 +14595,7 @@ var publishFiles = {
 };
 var recordFiles = {
   write: async (path, text) => {
-    await mkdir4(dirname4(path), { recursive: true });
+    await mkdir4(dirname3(path), { recursive: true });
     await writeFile4(path, text);
   },
   list: (folder) => readdir4(folder).catch(() => []),
@@ -15450,7 +14604,7 @@ var recordFiles = {
 };
 var statusRecords = (dir, sessionId) => ({
   host: "omp",
-  folder: join5(dir, "overview-calls"),
+  folder: join4(dir, "overview-calls"),
   session: sessionId,
   files: recordFiles
 });
@@ -15866,13 +15020,13 @@ async function isUsageLimitOutcome(status, message) {
   return ai.isUsageLimitOutcome(status, message);
 }
 var defaultDeps = {
-  stateDir: (pi) => join6(pi.pi.getAgentDir(), "inbox"),
+  stateDir: (pi) => join5(pi.pi.getAgentDir(), "inbox"),
   now: Date.now,
-  newId: randomUUID3,
+  newId: randomUUID,
   settleWindowMs: SETTLED_MS,
   home: homedir(),
-  isNextBuild: existsSync(join6(dirname5(dirname5(fileURLToPath2(import.meta.url))), NEXT_BUILD_MARK)),
-  comparePage: join6(dirname5(fileURLToPath2(import.meta.url)), COMPARE_PAGE_FILE),
+  isNextBuild: existsSync(join5(dirname4(dirname4(fileURLToPath2(import.meta.url))), NEXT_BUILD_MARK)),
+  comparePage: join5(dirname4(fileURLToPath2(import.meta.url)), COMPARE_PAGE_FILE),
   complete: defaultComplete,
   copy: copyToClipboard,
   background: (work) => void work.catch(() => {
@@ -15881,8 +15035,6 @@ var defaultDeps = {
   after: (ms, fn) => void setTimeout(fn, ms).unref(),
   isUsageLimit: isUsageLimitOutcome,
   herdrTarget: herdrTarget(process.env),
-  tern: ternTarget(process.env),
-  watchTheme: async (publish, run, cwd) => watchTernTheme(publish, run, cwd, await import("@oh-my-pi/pi-tui/theme"), await import("@oh-my-pi/pi-tui/theme/loader"), await import("@oh-my-pi/pi-tui/theme/color")),
   questionHistory: (dir) => questionHistoryPlace(process.env, dir)
 };
 var messageOf = (err) => err instanceof Error ? err.message : String(err);
@@ -16017,26 +15169,31 @@ function createInbox(pi, deps = defaultDeps) {
   const sessions = sessionCalls(context);
   const { change } = sessions;
   const turns = turnHandlers(context, sessions);
-  const tern = ternSessions(deps.tern, run, sessions, deps.watchTheme);
-  if (deps.tern)
-    pi.registerShortcut("ctrl+alt+i", {
-      description: "Answer inbox questions from the composer",
-      handler: async (ctx) => {
-        try {
-          const page = await tern.keyboard(ctx);
-          if (!page)
-            return;
-          const { Editor, parseKey, truncateToWidth } = await import("@oh-my-pi/pi-tui");
-          const { getEditorTheme } = await import("@oh-my-pi/pi-tui/theme");
-          await ctx.ui.custom((tui, _theme, _keys, done) => inboxKeyboard(page, () => tui.requestRender(), () => done(null), parseKey, () => new Editor(getEditorTheme()), truncateToWidth), { signal: page.signal });
-        } catch (error) {
-          ctx.ui.notify(messageOf(error), "warning");
-        }
-      }
-    });
-  context.saved = tern.saved;
+  const decisions = decisionSessions(sessions.hostFor);
+  async function answer(ctx) {
+    const review = decisions.start(ctx);
+    if (!review || review.open)
+      return;
+    review.open = true;
+    review.redraw();
+    try {
+      const { Editor, parseKey, wrapTextWithAnsi } = await import("@oh-my-pi/pi-tui");
+      const { getEditorTheme } = await import("@oh-my-pi/pi-tui/theme");
+      if (review.lifetime.signal.aborted)
+        return;
+      await ctx.ui.custom((tui, theme, _keys, done) => answerComponent(review, () => tui.requestRender(), () => done(null), parseKey, () => new Editor(getEditorTheme()), styleOf(theme), wrapTextWithAnsi), { signal: review.lifetime.signal });
+    } catch (error) {
+      if (!review.lifetime.signal.aborted)
+        ctx.ui.notify(messageOf(error), "warning");
+    } finally {
+      review.open = false;
+      review.redraw();
+    }
+  }
+  pi.registerShortcut("ctrl+alt+i", { description: "Answer inbox questions from the composer", handler: answer });
+  context.saved = decisions.saved;
   const start = (ctx, parentFile) => {
-    tern.start(ctx);
+    decisions.start(ctx);
     return turns.start(ctx, parentFile);
   };
   const activity = activityHandlers(context, sessions);
@@ -16060,7 +15217,8 @@ function createInbox(pi, deps = defaultDeps) {
   pi.on("session_switch", (event, ctx) => start(ctx, event.reason === "fork" ? event.previousSessionFile : undefined));
   pi.on("session_branch", (event, ctx) => start(ctx, event.previousSessionFile));
   pi.on("session_shutdown", async (event, ctx) => {
-    await Promise.all([tern.stop(ctx), turns.onSessionShutdown(event, ctx)]);
+    decisions.stop(ctx);
+    await turns.onSessionShutdown(event, ctx);
   });
   pi.on("before_agent_start", turns.onBeforeAgentStart);
   pi.on("input", turns.onInput);
@@ -16116,7 +15274,7 @@ function createInbox(pi, deps = defaultDeps) {
       return;
     ctx.ui.setWidget(BAND_KEY, (tui, theme) => {
       const style = styleOf(theme);
-      return bandWidget(ctx, inbox, tui, style, deps.now, deps.tern ? "Ctrl+Alt+I to answer " : undefined);
+      return bandWidget(ctx, inbox, tui, style, deps.now, decisions.get(ctx));
     }, { placement: "aboveEditor" });
   }
   async function openPanelUi(ctx, isDemo) {
@@ -16175,8 +15333,6 @@ function createInbox(pi, deps = defaultDeps) {
           await openPanelUi(ctx, false);
         return;
       }
-      if (!args.trim() && await tern.open(ctx))
-        return;
       const isDemo = args.trim() === "demo";
       const target = deps.herdrTarget;
       const isHerdrApp = ctx.mode === "tui" && !args.trim() && target?.kind === "terminal";
@@ -16186,7 +15342,7 @@ function createInbox(pi, deps = defaultDeps) {
       if (herdr?.isShown)
         return;
       if (ctx.mode === "tui")
-        return openPanelUi(ctx, isDemo);
+        return !args.trim() && !isHerdrApp ? answer(ctx) : openPanelUi(ctx, isDemo);
       const screen = isDemo ? await demoSource({
         now: deps.now,
         after: () => {},

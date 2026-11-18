@@ -73,7 +73,7 @@ export const CLIENTS: Record<ClientId, Client> = {
       },
       'herdr-sidebar': { kind: 'full' },
       'herdr-look': { kind: 'full' },
-      'tern-decisions': { kind: 'unsupported', reason: 'Requires omp in Tern.' },
+      'omp-decisions': { kind: 'unsupported', reason: 'Uses omp’s composer.' },
       'herdr-open': { kind: 'full' },
       'herdr-install': { kind: 'full' },
       'status-children': { kind: 'full' },
@@ -207,7 +207,7 @@ export const CLIENTS: Record<ClientId, Client> = {
         kind: 'different',
         reason: 'Codex runs no hook when a session ends, so its published file stays.',
       },
-      'tern-decisions': { kind: 'unsupported', reason: 'Requires omp in Tern.' },
+      'omp-decisions': { kind: 'unsupported', reason: 'Uses omp’s composer.' },
       'herdr-open': {
         kind: 'unsupported',
         reason:
@@ -346,7 +346,7 @@ export const CLIENTS: Record<ClientId, Client> = {
       },
       'herdr-sidebar': { kind: 'full' },
       'herdr-look': { kind: 'full' },
-      'tern-decisions': { kind: 'full' },
+      'omp-decisions': { kind: 'full' },
       'herdr-open': { kind: 'full' },
       'herdr-install': { kind: 'full' },
       'status-children': {

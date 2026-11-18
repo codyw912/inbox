@@ -1,30 +1,28 @@
-# omp in Tern
+# Answering inbox questions in omp
 
-This fork of [petekp/inbox](https://github.com/petekp/inbox) adds a decision pane beside the omp transcript. The first open question in an interactive session opens the pane. Close it whenever you like. `/inbox` brings it back or focuses the existing pane. `/inbox full` opens the original four-tab keyboard panel for Status, Asks, Finds and PR actions.
-
-Press **Ctrl+Alt+I** (**Control+Option+I** on macOS) in the omp composer to start answering. The transcript stays visible and keyboard focus stays in omp. A short key guide takes the place of the composer until you leave answer mode, then omp restores your original prompt draft. The sibling pane follows the Tern window’s light or dark theme, terminal and widget colors, and UI font settings.
+A question appears as a single line above the prompt. Keep typing, switch splits, or press **Ctrl+Alt+I** (**Control+Option+I** on macOS) to answer in place. The transcript stays visible. Leaving review brings back your unfinished prompt. The same extension renders native Tern Surface Protocol components in Tern and terminal rows elsewhere.
 
 | Key | Action |
 | --- | --- |
 | `j` / `k` | Next / previous question |
-| `h` / `l`, then **Space** | Move to a choice, then select it |
-| `1`–`9` | Select a numbered choice on the current question |
-| `i`, then **Esc** | Write a reply, then keep the draft and resume navigation. Ctrl+G cancels the current edit in omp |
-| `x` | Clear this question’s draft |
-| **Enter** / **Shift+Enter** | Send this reply / send all selected replies together |
-| `q` or **Esc** | Leave answer mode and resume the original prompt |
-| `?` | Show or hide keyboard help |
+| `h` / `l`, then **Space** | Move to a choice and stage it |
+| `1`–`9` | Stage a numbered choice immediately. ★ marks the recommendation, ✓ your selection |
+| `i`, then **Esc** | Write a reply and keep it. Enter inserts a newline. Ctrl+G cancels this edit |
+| `v` | Read the full question, choices and context. Scroll with `j` / `k` and press `v` to return |
+| `x` | Clear the current staged reply |
+| **Enter** | Send the current staged reply |
+| `s` or **Shift+Enter** | Send every staged reply together in question order |
+| `q` or **Esc** | Return to the prompt |
+| `?` | Show the key guide |
 
-Select an option or write a reply on any question. **Send this reply** sends just that row. **Send N together** sends every selected row in one omp message, in the displayed order. Other rows can wait. A busy agent receives one follow-up. Choices close when submitted. Written replies keep the question available for further discussion. If a question changes before submission, review it again. Drafts survive a reload of the open pane.
+Use `/inbox` if your terminal reserves the shortcut. Use `s` for a batch if your terminal sends the same keycode for Enter and Shift+Enter. In a configured Herdr app terminal, `/inbox` opens the Herdr panel and the shortcut opens composer review. Use `/inbox full` for Status, Asks, Finds and PR actions, or `/inbox demo` for the sample panel.
 
-From this checkout, try the bundled extension in a new Tern terminal:
+Choices close the question on submission. A written reply keeps it available for further discussion. A busy agent receives a batch as one follow-up. Staged replies survive leaving and re-entering review in the active session. Switching sessions or restarting omp clears unsent drafts. If the agent revises or closes a question, its old answer is discarded.
+
+From this checkout, try the bundled extension in either terminal:
 
 ```sh
 omp --no-extensions -e "$PWD/omp/dist/host.js"
 ```
 
-This one-run command disables automatic extension discovery, including the installed upstream Inbox, and explicitly loads this build. To use your usual extensions, disable the upstream copy and link this checkout’s `omp/` package with `omp plugin link "$PWD/omp"`. Start a new omp session afterward. The fork reads the same per-session state as the upstream extension.
-
-The default is to open once when the session has a question. Start omp with `OMP_INBOX_TERN=manual` to open the split only with the shortcut or `/inbox`, or `OMP_INBOX_TERN=off` to use only the original panel. An automatic split restores the previously focused block when Tern still has the new pane focused. Opening it with `/inbox` gives the inbox keyboard focus. Outside Tern, omp uses its existing panel. The pane needs Tern’s `tern browser` command on PATH and a local graphical Tern window. The page is served on loopback by the owning omp process.
-
-The pane receives changes from the session and does no idle polling. Batching several answers also reduces the number of user messages that trigger agent work. Inbox still uses its usual model calls to maintain the ledger and Status after each reply.
+For ongoing use, disable the upstream Inbox extension and run `omp plugin link "$PWD/omp"`. A fresh omp session loads the linked copy. This fork uses the same per-session ledger as [petekp/inbox](https://github.com/petekp/inbox).

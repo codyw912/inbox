@@ -35,9 +35,10 @@ import type { OmpState } from './state'
 import { useQuestionHistory } from './state'
 import { questionHistoryPlace } from './question-history'
 import type { HistoryPlace } from '../../hooks/history-store'
-import { inboxKeyboard } from './tern-control'
-import { watchTernTheme, type WatchTheme } from './tern-theme'
-import { ternSessions, ternTarget } from './tern-pane'
+import { decisionSessions } from './decision-session'
+import { answerComponent } from './decision-view'
+export type { Component } from '@oh-my-pi/pi-tui'
+export type { NativeNode, NativeUiEvent } from '@oh-my-pi/pi-tui/native/node'
 import { OMP, TOOL_LABELS } from './texts'
 import { activityHandlers } from './host-activity'
 import { isUnattended, sessionIdOf } from './host-context'
@@ -84,8 +85,6 @@ export type HostDeps = {
   isUsageLimit: (status: number | undefined, message: string) => Promise<boolean>
   /** The Herdr pane or app terminal omp runs in, from `herdrTarget`, or null outside Herdr. */
   herdrTarget: HerdrTarget | null
-  tern?: ReturnType<typeof ternTarget>
-  watchTheme?: WatchTheme
   /** The question history for the sessions saved in `dir`. A host without one saves no history. */
   questionHistory?: (dir: string) => HistoryPlace | null
 }
@@ -120,16 +119,6 @@ const defaultDeps: HostDeps = {
   after: (ms, fn) => void setTimeout(fn, ms).unref(),
   isUsageLimit: isUsageLimitOutcome,
   herdrTarget: herdrTarget(process.env),
-  tern: ternTarget(process.env),
-  watchTheme: async (publish, run, cwd) =>
-    watchTernTheme(
-      publish,
-      run,
-      cwd,
-      await import('@oh-my-pi/pi-tui/theme'),
-      await import('@oh-my-pi/pi-tui/theme/loader'),
-      await import('@oh-my-pi/pi-tui/theme/color'),
-    ),
   questionHistory: dir => questionHistoryPlace(process.env, dir),
 }
 
@@ -303,36 +292,40 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
   const sessions = sessionCalls(context)
   const { change } = sessions
   const turns = turnHandlers(context, sessions)
-  const tern = ternSessions(deps.tern, run, sessions, deps.watchTheme)
-  if (deps.tern)
-    pi.registerShortcut('ctrl+alt+i', {
-      description: 'Answer inbox questions from the composer',
-      handler: async ctx => {
-        try {
-          const page = await tern.keyboard(ctx)
-          if (!page) return
-          const { Editor, parseKey, truncateToWidth } = await import('@oh-my-pi/pi-tui')
-          const { getEditorTheme } = await import('@oh-my-pi/pi-tui/theme')
-          await ctx.ui.custom(
-            (tui, _theme, _keys, done) =>
-              inboxKeyboard(
-                page,
-                () => tui.requestRender(),
-                () => done(null),
-                parseKey,
-                () => new Editor(getEditorTheme()),
-                truncateToWidth,
-              ),
-            { signal: page.signal },
-          )
-        } catch (error) {
-          ctx.ui.notify(messageOf(error), 'warning')
-        }
-      },
-    })
-  context.saved = tern.saved
+  const decisions = decisionSessions(sessions.hostFor)
+  async function answer(ctx: ExtensionContext) {
+    const review = decisions.start(ctx)
+    if (!review || review.open) return
+    review.open = true
+    review.redraw()
+    try {
+      const { Editor, parseKey, wrapTextWithAnsi } = await import('@oh-my-pi/pi-tui')
+      const { getEditorTheme } = await import('@oh-my-pi/pi-tui/theme')
+      if (review.lifetime.signal.aborted) return
+      await ctx.ui.custom(
+        (tui, theme, _keys, done) =>
+          answerComponent(
+            review,
+            () => tui.requestRender(),
+            () => done(null),
+            parseKey,
+            () => new Editor(getEditorTheme()),
+            styleOf(theme),
+            wrapTextWithAnsi,
+          ),
+        { signal: review.lifetime.signal },
+      )
+    } catch (error) {
+      if (!review.lifetime.signal.aborted) ctx.ui.notify(messageOf(error), 'warning')
+    } finally {
+      review.open = false
+      review.redraw()
+    }
+  }
+  pi.registerShortcut('ctrl+alt+i', { description: 'Answer inbox questions from the composer', handler: answer })
+  context.saved = decisions.saved
   const start = (ctx: ExtensionContext, parentFile?: string) => {
-    tern.start(ctx)
+    decisions.start(ctx)
     return turns.start(ctx, parentFile)
   }
   const activity = activityHandlers(context, sessions)
@@ -357,7 +350,8 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
   // `previousSessionFile`. A `/branch` in the same file keeps the id, and the fork step then finds nothing to copy.
   pi.on('session_branch', (event, ctx) => start(ctx, event.previousSessionFile))
   pi.on('session_shutdown', async (event, ctx) => {
-    await Promise.all([tern.stop(ctx), turns.onSessionShutdown(event, ctx)])
+    decisions.stop(ctx)
+    await turns.onSessionShutdown(event, ctx)
   })
   pi.on('before_agent_start', turns.onBeforeAgentStart)
   pi.on('input', turns.onInput)
@@ -421,7 +415,7 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
       BAND_KEY,
       (tui, theme) => {
         const style = styleOf(theme)
-        return bandWidget(ctx, inbox, tui, style, deps.now, deps.tern ? 'Ctrl+Alt+I to answer ' : undefined)
+        return bandWidget(ctx, inbox, tui, style, deps.now, decisions.get(ctx))
       },
       { placement: 'aboveEditor' },
     )
@@ -485,14 +479,13 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
         if (again.isShown && ctx.mode === 'tui') await openPanelUi(ctx, false)
         return
       }
-      if (!args.trim() && (await tern.open(ctx))) return
       const isDemo = args.trim() === 'demo'
       const target = deps.herdrTarget
       const isHerdrApp = ctx.mode === 'tui' && !args.trim() && target?.kind === 'terminal'
       const herdr = isHerdrApp ? await openHerdrPanel({ run, isFile }, target) : null
       if (herdr) ctx.ui.notify(herdr.text, herdr.isShown ? 'info' : 'warning')
       if (herdr?.isShown) return
-      if (ctx.mode === 'tui') return openPanelUi(ctx, isDemo)
+      if (ctx.mode === 'tui') return !args.trim() && !isHerdrApp ? answer(ctx) : openPanelUi(ctx, isDemo)
       const screen = isDemo
         ? await demoSource({
             now: deps.now,

@@ -1,6 +1,6 @@
 # Inbox
 
-For the fork’s side-by-side decision pane and grouped replies, see [omp in Tern](omp/TERN.md).
+For keyboard review and grouped replies in the omp composer, see [Answering inbox questions](omp/TERN.md).
 
 I have ADHD. Working with an agent in a chat thread format is very cognitively taxing. The number of things you're having to hold in your head begins to compound the longer the session goes on. The questions, bugs, ideas, and tasks all begin to pile up and intermix making it difficult to keep everything in line.
 
@@ -81,20 +81,10 @@ command from inside the app.
 
 ### omp
 
-```sh
-omp plugin marketplace add petekp/inbox
-omp plugin install inbox@inbox-omp
-```
-
-The inbox starts working in the next omp session. `omp plugin list` shows it
-as `inbox@inbox-omp`. It reads `.omp-plugin/marketplace.json`, which omp looks
-for before the `.claude-plugin/` folder that Claude Code reads.
-
-To update, run these, then restart omp:
+From this checkout, disable any installed upstream Inbox, then link the fork and start a new omp session.
 
 ```sh
-omp plugin marketplace update inbox-omp
-omp plugin upgrade inbox@inbox-omp
+omp plugin link "$PWD/omp"
 ```
 
 After each reply, the inbox makes two model calls, one to update the rows and one to write the Status tab. It uses
@@ -129,7 +119,7 @@ The PRs tab needs the GitHub CLI, `gh`, signed in.
 
 ## Using it
 
-Type `/inbox` in Claude Code or omp, or open the Inbox tab in the ChatGPT app. The
+Type `/inbox` in Claude Code or `/inbox full` in omp, or open the Inbox tab in the ChatGPT app. The
 inbox has four tabs: Status, Asks, Finds and PRs.
 
 ### Status
@@ -229,7 +219,7 @@ Help lists the keys and what each mark means.
 - **ChatGPT app:** you click, or press the same keys as in the terminal. The
   tab shows no letters.
 - **Herdr app:** see [Herdr app pane](#herdr-app-pane).
-- **omp:** `/inbox` opens the panel over the conversation, and esc closes it.
+- **omp:** Ctrl+Alt+I opens question review at the prompt. `/inbox full` opens the four-tab panel, and Esc closes it.
   Each action shows the letter that runs it, and Reply is `t`. Arrow keys move
   between rows and between a row's buttons, and enter presses the focused
   button. Tab, or the number keys, switch tabs. On the Status, `j` and `k`
@@ -239,8 +229,7 @@ Help lists the keys and what each mark means.
 In Claude Code, a line above your prompt counts what needs you and the
 findings waiting, with a button that opens the panel. When Claude stops on an
 error, a second line says why, with a Resume button after an API error. The
-ChatGPT app has no such line. omp has a line with the same counts. It says
-`/inbox` opens the panel, and it has no stop line.
+ChatGPT app has no such line. In omp, a line above the prompt previews the current question or shows the inbox counts. A stopped turn adds its reason underneath.
 
 ### Herdr app pane
 

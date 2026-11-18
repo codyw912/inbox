@@ -97,6 +97,7 @@ export const pi = () =>
     on: (name: string, handler: Handler) => w.handlers.set(name, handler),
     events: { on: (channel: string, handler: Handler) => w.handlers.set(channel, handler) },
     registerTool: (tool: any) => w.tools.set(tool.name, tool),
+    registerShortcut: (key: string, shortcut: any) => w.commands.set(key, shortcut),
     registerCommand: (name: string, command: any) => w.commands.set(name, command),
     sendMessage: (message: { content: string }, options: unknown) => {
       w.hidden.push({ content: message.content, options })

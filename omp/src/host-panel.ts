@@ -1,3 +1,6 @@
+import type { DecisionSession } from './decision-session'
+import { summaryLine, summaryNode } from './decision-view'
+import { fit } from './panel-text'
 import { version } from '../package.json'
 
 import type { PrPress } from '../../hooks/pr-press'
@@ -168,7 +171,7 @@ export function bandWidget(
   tui: { requestRender(): void },
   style: Style,
   now: () => number,
-  shortcut?: string,
+  review?: DecisionSession,
 ) {
   let screen: PanelScreen | null = null
   const refresh = () =>
@@ -187,9 +190,20 @@ export function bandWidget(
   void refresh()
   const stop = inbox.onChange(ctx, () => void refresh())
 
+  const unsubscribe = review?.subscribe(() => tui.requestRender())
   return {
-    render: (width: number) => (screen ? bandLines(screen, width, now(), style, shortcut) : []),
+    describe: ({ cols }: { cols: number }) =>
+      review && !review.open && review.current && !screen?.stop ? summaryNode(review, cols) : null,
+    render: (width: number) => {
+      const band = screen ? bandLines(screen, width, now(), style, '/inbox full to open ') : []
+      if (review?.open) return band.slice(1)
+      if (!review?.current) return band
+      return [fit(style.tone('accent', summaryLine(review, width)), width), ...band.slice(1)]
+    },
     invalidate: () => {},
-    dispose: stop,
+    dispose() {
+      stop()
+      unsubscribe?.()
+    },
   }
 }

@@ -38,11 +38,6 @@ Part of [the look map](../looks.md#files).
 | `omp/dist/host.js` | omp host. The committed bundle, which `omp/package.json` lists under `omp.extensions`. |
 | `omp/package.json` | omp host. The plugin's version, `omp.extensions`, and the build, check, test and type scripts. |
 | `.omp-plugin/marketplace.json` | omp host. The omp marketplace, which points at `omp/`. omp reads it before `.claude-plugin/marketplace.json`, which Claude Code reads. |
-| `omp/src/tern-pane.ts` | Opens and reuses the Tern browser split for the active interactive omp session. |
-| `omp/src/assets.d.ts` | Declares the text value of bundled CSS imports. |
-| `omp/src/tern-control.ts` | Routes composer keystrokes to the session’s decision pane and edits write-ins with omp’s multiline editor. |
-| `omp/ui/decisions.css` | Tern decision form styles, using the window’s active palette. |
-| `omp/src/tern-theme.ts` | Resolves the Tern window’s active theme, UI size and font, falls back to omp colors, and removes its subscription when the session ends. |
-| `omp/src/tern-server.ts` | Serves the session-scoped page and pushes changed decision snapshots over an event stream. |
-| `omp/src/tern-replies.ts` | Projects decision rows and commits a reviewed selection as one omp delivery. |
-| `omp/ui/decisions.html` | Interactive decision form and per-question drafts for the Tern split. |
+| `omp/src/decision-session.ts` | Tracks the active question, selections and unsent replies for the current session. |
+| `omp/src/decision-view.ts` | Describes the composer review to Tern and renders it in a regular terminal. |
+| `omp/src/decision-replies.ts` | Projects open questions and commits the reviewed replies as one delivery. |

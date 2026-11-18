@@ -37,7 +37,7 @@ export type FeatureId =
   | 'dim-pressed-button'
   | 'herdr-sidebar'
   | 'herdr-look'
-  | 'tern-decisions'
+  | 'omp-decisions'
   | 'herdr-open'
   | 'herdr-install'
   | 'status-children'

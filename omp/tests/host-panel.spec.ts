@@ -179,7 +179,7 @@ test('the band shows above the editor and redraws with the counts after a change
   await until(() => renders.count > before)
   expect(renders.count).toBeGreaterThan(before)
   expect(band.render(80).join('')).toContain('Asks')
-  expect(band.render(80).join('')).toContain('/inbox to open')
+  expect(band.render(80).join('')).toContain('/inbox full to open')
 })
 
 test('the band is not drawn without a terminal UI', async () => {
@@ -189,11 +189,11 @@ test('the band is not drawn without a terminal UI', async () => {
   expect(widgets).toHaveLength(0)
 })
 
-test('/inbox hides the band while the panel shows, draws the session, presses, and brings the band back', async () => {
+test('/inbox full hides the band while the panel shows, draws the session, presses, and brings the band back', async () => {
   createInbox(pi(), deps())
   const { ctx, widgets, components } = tuiCtx()
   await record({ kind: 'task', ask: 'Try the CLI by hand' }, ctx)
-  const opened = w.commands.get('inbox').handler('', ctx)
+  const opened = w.commands.get('inbox').handler('full', ctx)
   await until(() => components.length > 0)
   expect(widgets.at(-1)).toMatchObject({ key: 'inbox-band', content: undefined })
   const panel = components[0]
@@ -365,4 +365,46 @@ test('a Status saved while the panel already shows the Status page starts a look
   await settle()
 
   expect(state().ledger.overview.lastLookAt).not.toBeNull()
+})
+
+test('questions appear passively and review keeps staged replies across leaving and reopening the composer', async () => {
+  createInbox(pi(), deps())
+  const { ctx, widgets, components } = tuiCtx()
+  await call('session_start', {}, ctx)
+  const band = (widgets[0]!.content as any)({ requestRender() {} }, theme)
+  await record({ kind: 'question', ask: 'Pick a store?', options: ['SQLite', 'JSON'], rec: 'SQLite' }, ctx)
+  await record({ kind: 'question', ask: 'When to refresh?', options: ['Now', 'Later'], rec: 'Now' }, ctx)
+  expect(components).toHaveLength(0)
+  expect(band.render(80)).toHaveLength(1)
+  expect(band.describe({ cols: 32 }).p.spans[0].t).toContain('Pick a store?')
+  const open = w.commands.get('ctrl+alt+i').handler(ctx)
+  await until(() => components.length === 1)
+  const review = components[0]
+  expect(band.render(32)).toEqual([])
+  expect(review.describe({ cols: 32 }).p.role).toBe('inbox.questions')
+  review.handleInput('2')
+  review.handleInput('i')
+  review.handleInput('\x1b')
+  review.handleInput('j')
+  review.handleInput('1')
+  review.handleInput('v')
+  expect(review.render(32).join(' ')).toContain('scroll')
+  review.handleInput('v')
+  review.handleInput('q')
+  await open
+  review.dispose()
+  expect(band.render(32)[0]).toContain('2 staged')
+  expect(w.sent).toHaveLength(0)
+  const reopened = w.commands.get('inbox').handler('', ctx)
+  await until(() => components.length === 2)
+  const again = components[1]
+  again.handleInput('s')
+  again.handleInput('s')
+  await until(() => again.render(32).join(' ').includes('Sent 2 replies'))
+  expect(w.sent.map(m => m.text)).toEqual(['Re "Pick a store?": JSON\n\nRe "When to refresh?": Now'])
+  again.handleInput('q')
+  await reopened
+  again.dispose()
+  band.dispose()
+  await settle()
 })
