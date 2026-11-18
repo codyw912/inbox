@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Inbox · omp</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #faf9f6;
+        --fg: #212622;
+        --soft: #646c65;
+        --line: #d2d6ce;
+        --card: #fff;
+        --accent: #216449;
+        --wash: #edf4ef;
+        font:
+          15px/1.45 'Instrument Sans',
+          ui-sans-serif,
+          system-ui,
+          sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #191d1b;
+          --fg: #ebefe9;
+          --soft: #a2aca4;
+          --card: #232925;
+          --line: #424c45;
+          --accent: #a2dcc0;
+          --wash: #273c30;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      main,
+      footer > div {
+        max-width: 48rem;
+        margin: auto;
+        padding: 1.3rem;
+      }
+      main {
+        width: 100%;
+        padding-bottom: 2rem;
+      }
+      header {
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.85rem;
+      }
+      h1 {
+        font:
+          600 clamp(1.65rem, 6vw, 2.25rem)/1.15 Georgia,
+          serif;
+        margin: 0;
+      }
+      h2 {
+        font-weight: 600;
+        font-size: 1.05rem;
+        line-height: 1.4;
+        margin: 0;
+      }
+      p {
+        margin: 0.35rem 0;
+        color: var(--soft);
+      }
+      #focus:empty,
+      #notice:empty {
+        display: none;
+      }
+      article {
+        margin: 1.2rem 0;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 1rem;
+      }
+      fieldset {
+        padding: 0;
+        margin: 0.7rem 0;
+        border: 0;
+        min-width: 0;
+      }
+      .choice {
+        display: flex;
+        gap: 0.5rem;
+        align-items: baseline;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        padding: 0.55rem 0.65rem;
+        margin: 0.35rem 0;
+        cursor: pointer;
+      }
+      .choice:has(:checked) {
+        background: var(--wash);
+        border-color: var(--accent);
+      }
+      input {
+        accent-color: var(--accent);
+      }
+      small {
+        display: block;
+        color: var(--soft);
+      }
+      em {
+        font-style: normal;
+        font-weight: 600;
+        color: var(--accent);
+        font-size: 0.76rem;
+        margin-left: 0.45rem;
+      }
+      textarea {
+        width: 100%;
+        resize: vertical;
+        min-height: 2.45rem;
+        background: var(--card);
+        color: inherit;
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        padding: 0.5rem;
+        font: inherit;
+        display: block;
+        margin: 0.45rem 0;
+      }
+      button {
+        font: inherit;
+        color: var(--accent);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        padding: 0.38rem 0.7rem;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.48;
+        cursor: default;
+      }
+      button.primary {
+        color: var(--bg);
+        border-color: var(--accent);
+        background: var(--accent);
+        font-weight: 600;
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+      details {
+        color: var(--soft);
+      }
+      summary {
+        cursor: pointer;
+      }
+      li {
+        margin: 0.3rem 0;
+      }
+      footer {
+        margin-top: auto;
+        position: sticky;
+        bottom: 0;
+        background: var(--bg);
+        border-top: 1px solid var(--line);
+      }
+      footer > div {
+        padding-block: 0.7rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+      }
+      #notice {
+        font-size: 0.87rem;
+        flex-basis: 100%;
+      }
+      #count {
+        font-size: 0.85rem;
+        color: var(--soft);
+      }
+      #empty {
+        margin: 1.2rem 0;
+      }
+      body {
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Inbox</h1>
+        <p id="focus"></p>
+      </header>
+      <p id="empty" role="status">Connecting to omp…</p>
+      <section id="questions" aria-label="Open questions"></section>
+      <details id="other">
+        <summary>Session details</summary>
+        <div id="context"></div>
+        <p>Open <code>/inbox full</code> in omp for all actions.</p>
+      </details>
+    </main>
+    <footer>
+      <div>
+        <span id="count">Connecting…</span><button class="primary" id="batch" disabled>Send replies</button>
+        <p id="notice" role="status"></p>
+      </div>
+    </footer>
+    <script>
+      'use strict'
+      const byId = id => document.getElementById(id)
+      const el = (tag, text) => {
+        const node = document.createElement(tag)
+        if (text !== undefined) node.textContent = text
+        return node
+      }
+      let view = { questions: [] },
+        online = false,
+        sending = false
+      let drafts = {}
+      const storageKey = 'inbox:' + location.pathname
+      try {
+        drafts = JSON.parse(sessionStorage.getItem(storageKey)) || {}
+      } catch {}
+      function save() {
+        try {
+          sessionStorage.setItem(storageKey, JSON.stringify(drafts))
+        } catch {}
+      }
+      const cards = new Map()
+      function controls() {
+        const n = view.questions.filter(q => drafts[q.id]?.revision === q.revision && drafts[q.id].value.trim()).length
+        byId('count').textContent = !online
+          ? 'Disconnected · reconnecting…'
+          : n
+            ? n + ' selected'
+            : 'No replies selected'
+        byId('batch').textContent = sending ? 'Sending…' : n > 1 ? 'Send ' + n + ' together' : 'Send reply'
+        byId('batch').disabled = !online || sending || !n
+        for (const [id, card] of cards) {
+          card.one.disabled = !online || sending || drafts[id]?.revision !== card.revision || !drafts[id]?.value.trim()
+          card.clear.disabled = sending || !drafts[id]
+          card.fields.disabled = sending
+        }
+      }
+      function choose(q, kind, value) {
+        if (value) drafts[q.id] = { id: q.id, revision: q.revision, kind, value }
+        else delete drafts[q.id]
+        save()
+        controls()
+      }
+      function cardFor(q) {
+        const node = el('article'),
+          title = el('h2', q.ask)
+        node.append(title)
+        if (q.context) node.append(el('p', q.context))
+        const fields = el('fieldset')
+        fields.setAttribute('aria-label', q.ask)
+        node.append(fields)
+        const free = el('textarea')
+        free.rows = 1
+        free.maxLength = 16000
+        free.placeholder = 'Write a reply…'
+        free.setAttribute('aria-label', 'Written reply to ' + q.ask)
+        const options = []
+        for (const opt of q.options) {
+          const label = el('label'),
+            radio = el('input'),
+            words = el('span', opt)
+          label.className = 'choice'
+          radio.type = 'radio'
+          radio.name = q.id
+          radio.checked = drafts[q.id]?.kind === 'choice' && drafts[q.id].value === opt
+          radio.onchange = () => {
+            free.value = ''
+            choose(q, 'choice', opt)
+          }
+          if (opt === q.rec) words.append(el('em', ' Recommended'))
+          if (q.descriptions?.[opt]) words.append(el('small', q.descriptions[opt]))
+          if (opt === q.rec && q.reason) words.append(el('small', q.reason))
+          label.append(radio, words)
+          fields.append(label)
+          options.push(radio)
+        }
+        free.value = drafts[q.id]?.kind === 'text' ? drafts[q.id].value : ''
+        free.oninput = () => {
+          for (const r of options) r.checked = false
+          choose(q, 'text', free.value)
+        }
+        fields.append(free)
+        const actions = el('div'),
+          one = el('button', 'Send this reply'),
+          clear = el('button', 'Clear')
+        actions.className = 'actions'
+        one.onclick = () => send([q.id])
+        clear.onclick = () => {
+          free.value = ''
+          for (const r of options) r.checked = false
+          choose(q, 'text', '')
+        }
+        actions.append(one, clear)
+        node.append(actions)
+        return { node, one, clear, fields, revision: q.revision }
+      }
+      function render(next) {
+        view = next
+        byId('focus').textContent = next.focus || ''
+        byId('empty').textContent = next.stale
+          ? 'The inbox is catching up. Questions may be out of date.'
+          : next.questions.length
+            ? ''
+            : 'No questions waiting.'
+        byId('empty').hidden = !byId('empty').textContent
+        const questions = byId('questions'),
+          ids = new Set(next.questions.map(q => q.id))
+        for (const [id, card] of cards)
+          if (!ids.has(id)) {
+            card.node.remove()
+            cards.delete(id)
+          }
+        // Keep in-progress typing and focus when another row changes.
+        let previous = null
+        for (const q of next.questions) {
+          let card = cards.get(q.id)
+          if (drafts[q.id] && drafts[q.id].revision !== q.revision && !sending) {
+            delete drafts[q.id]
+            card?.node.remove()
+            card = undefined
+            byId('notice').textContent = 'A question changed. Choose its reply again.'
+          }
+          if (!card || card.revision !== q.revision) {
+            card?.node.remove()
+            card = cardFor(q)
+            cards.set(q.id, card)
+          }
+          const position = previous ? previous.nextSibling : questions.firstChild
+          if (position !== card.node) questions.insertBefore(card.node, position)
+          previous = card.node
+        }
+        // Keep a removed row's draft until delivery is acknowledged. A rejected send can reopen it.
+        save()
+        const context = byId('context')
+        context.replaceChildren()
+        for (const [name, values] of [
+          ['Tasks', next.tasks],
+          ['Findings', next.findings],
+          ['Pull requests', next.prs],
+        ]) {
+          if (!values.length) continue
+          const list = el('ul')
+          for (const v of values) list.append(el('li', v))
+          context.append(el('h2', name), list)
+        }
+        controls()
+      }
+      async function send(ids) {
+        if (sending || !online) return
+        const replies = ids
+          .map(id => drafts[id])
+          .filter(r => r && r.value.trim() && view.questions.some(q => q.id === r.id && q.revision === r.revision))
+        if (!replies.length) return
+        sending = true
+        controls()
+        try {
+          const res = await fetch('send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(replies),
+          })
+          if (!res.ok) throw new Error((await res.text()) || 'omp could not accept the replies.')
+          for (const r of replies) {
+            delete drafts[r.id]
+            cards.get(r.id)?.node.remove()
+            cards.delete(r.id)
+          }
+          byId('notice').textContent =
+            replies.length === 1 ? 'Reply sent to omp.' : replies.length + ' replies sent in one message.'
+        } catch (e) {
+          byId('notice').textContent =
+            e instanceof TypeError ? 'Connection interrupted. Check the conversation before sending again.' : e.message
+        } finally {
+          sending = false
+          render(view)
+        }
+      }
+      byId('batch').onclick = () => send(view.questions.map(q => q.id))
+      const events = new EventSource('events')
+      events.onmessage = e => {
+        online = true
+        render(JSON.parse(e.data))
+      }
+      events.onerror = () => {
+        online = false
+        controls()
+      }
+    </script>
+  </body>
+</html>

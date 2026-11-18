@@ -26,6 +26,7 @@ import type { AgentTool, ToolAnswer } from '../../hooks/tools'
 import { NEXT_BUILD_MARK } from '../../hooks/banners'
 import { NO_HOLDS, SETTLED_MS } from '../../hooks/timing'
 import { INBOX_COMMAND_TEXT } from '../../hooks/tabs'
+import { copyToClipboard } from './commands'
 import { createPanel } from './controller'
 import { demoSource } from './demo'
 import { bandLines } from './panel'
@@ -36,6 +37,7 @@ import type { OmpState } from './state'
 import { useQuestionHistory } from './state'
 import { questionHistoryPlace } from './question-history'
 import type { HistoryPlace } from '../../hooks/history-store'
+import { ternSessions, ternTarget } from './tern-pane'
 import { OMP, TOOL_LABELS } from './texts'
 import { activityHandlers } from './host-activity'
 import { isUnattended, sessionIdOf } from './host-context'
@@ -83,6 +85,7 @@ export type HostDeps = {
   /** The Herdr pane or app terminal omp runs in, from `herdrTarget`, or null outside Herdr. */
   herdrTarget: HerdrTarget | null
   /** The question history for the sessions saved in `dir`. A host without one saves no history. */
+  tern?: ReturnType<typeof ternTarget>
   questionHistory?: (dir: string) => HistoryPlace | null
 }
 
@@ -102,25 +105,6 @@ async function isUsageLimitOutcome(status: number | undefined, message: string):
   return ai.isUsageLimitOutcome(status, message)
 }
 
-async function copyToClipboard(text: string): Promise<string | null> {
-  const candidates =
-    process.platform === 'darwin'
-      ? [['pbcopy']]
-      : process.platform === 'win32'
-        ? [['clip']]
-        : [['wl-copy'], ['xclip', '-selection', 'clipboard']]
-  for (const argv of candidates) {
-    try {
-      const child = Bun.spawn(argv, { stdin: Buffer.from(text), stdout: 'ignore', stderr: 'ignore' })
-      if ((await child.exited) === 0) return null
-    } catch {
-      continue
-    }
-  }
-
-  return `no clipboard command started (${candidates.map(c => c[0]).join(', ')})`
-}
-
 const defaultDeps: HostDeps = {
   stateDir: pi => join(pi.pi.getAgentDir(), 'inbox'),
   now: Date.now,
@@ -135,6 +119,7 @@ const defaultDeps: HostDeps = {
   after: (ms, fn) => void setTimeout(fn, ms).unref(),
   isUsageLimit: isUsageLimitOutcome,
   herdrTarget: herdrTarget(process.env),
+  tern: ternTarget(process.env),
   questionHistory: dir => questionHistoryPlace(process.env, dir),
 }
 
@@ -315,7 +300,12 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
   const sessions = sessionCalls(context)
   const { change } = sessions
   const turns = turnHandlers(context, sessions)
-  const { start } = turns
+  const tern = ternSessions(deps.tern, run, sessions)
+  context.saved = tern.saved
+  const start = (ctx: ExtensionContext, parentFile?: string) => {
+    tern.start(ctx)
+    return turns.start(ctx, parentFile)
+  }
   const activity = activityHandlers(context, sessions)
   const herdrAsk = ompHerdrAsk(deps.herdrTarget, context.memory, () => {
     for (const listeners of context.listeners.values()) for (const listener of listeners) listener()
@@ -337,7 +327,9 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
   // A `/btw` promotion, a fork from an entry and a command's branch give the session a new id, with the old file as
   // `previousSessionFile`. A `/branch` in the same file keeps the id, and the fork step then finds nothing to copy.
   pi.on('session_branch', (event, ctx) => start(ctx, event.previousSessionFile))
-  pi.on('session_shutdown', turns.onSessionShutdown)
+  pi.on('session_shutdown', async (event, ctx) => {
+    await Promise.all([tern.stop(ctx), turns.onSessionShutdown(event, ctx)])
+  })
   pi.on('before_agent_start', turns.onBeforeAgentStart)
   pi.on('input', turns.onInput)
   pi.on('agent_start', (event, ctx) => {
@@ -485,6 +477,7 @@ export function createInbox(pi: ExtensionAPI, deps: HostDeps = defaultDeps): Inb
         if (again.isShown && ctx.mode === 'tui') await openPanelUi(ctx, false)
         return
       }
+      if (!args.trim() && (await tern.open(ctx))) return
       const isDemo = args.trim() === 'demo'
       const target = deps.herdrTarget
       const isHerdrApp = ctx.mode === 'tui' && !args.trim() && target?.kind === 'terminal'

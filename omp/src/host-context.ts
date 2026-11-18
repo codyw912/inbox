@@ -55,6 +55,7 @@ export type HostContext = {
   modelNameOf(ctx: OmpContext): string | null
   /** Tells the agent `notes` at its next turn, out of the person's view. */
   sendNotes(notes: string[]): void
+  saved?(id: string, state: OmpState): void
 }
 
 /**

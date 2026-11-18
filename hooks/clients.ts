@@ -1,14 +1,14 @@
 import type { FeatureId } from './client-features'
 
 /**
- * The parity record: how each host supports each feature. `full` means the host does what the shared flow
+ * How each host supports each feature. `full` means the host does what the shared flow
  * describes. `different` means the person gets the feature another way. `unsupported` means the person gets none of it.
  * `docs/looks.md` explains each feature that is not `full` in "Differences on purpose", in a row whose first column
  * names the feature id in backticks. `hooks/client-features.ts` lists the feature ids. `scripts/check-structure.mjs`
  * fails when such a row is missing, and reads this file with the TypeScript AST, so write each entry as an object literal.
  */
 
-/** A host. Terminal and desktop share `claude-code`, since both run the mod. */
+/** Terminal and desktop share the Claude Code host. */
 export type ClientId = 'claude-code' | 'codex' | 'omp'
 
 type Support = { kind: 'full' } | { kind: 'different' | 'unsupported'; reason: string }
@@ -73,6 +73,7 @@ export const CLIENTS: Record<ClientId, Client> = {
       },
       'herdr-sidebar': { kind: 'full' },
       'herdr-look': { kind: 'full' },
+      'tern-decisions': { kind: 'unsupported', reason: 'Requires omp in Tern.' },
       'herdr-open': { kind: 'full' },
       'herdr-install': { kind: 'full' },
       'status-children': { kind: 'full' },
@@ -206,6 +207,7 @@ export const CLIENTS: Record<ClientId, Client> = {
         kind: 'different',
         reason: 'Codex runs no hook when a session ends, so its published file stays.',
       },
+      'tern-decisions': { kind: 'unsupported', reason: 'Requires omp in Tern.' },
       'herdr-open': {
         kind: 'unsupported',
         reason:
@@ -344,6 +346,7 @@ export const CLIENTS: Record<ClientId, Client> = {
       },
       'herdr-sidebar': { kind: 'full' },
       'herdr-look': { kind: 'full' },
+      'tern-decisions': { kind: 'full' },
       'herdr-open': { kind: 'full' },
       'herdr-install': { kind: 'full' },
       'status-children': {

@@ -38,3 +38,7 @@ Part of [the look map](../looks.md#files).
 | `omp/dist/host.js` | omp host. The committed bundle, which `omp/package.json` lists under `omp.extensions`. |
 | `omp/package.json` | omp host. The plugin's version, `omp.extensions`, and the build, check, test and type scripts. |
 | `.omp-plugin/marketplace.json` | omp host. The omp marketplace, which points at `omp/`. omp reads it before `.claude-plugin/marketplace.json`, which Claude Code reads. |
+| `omp/src/tern-pane.ts` | Opens and reuses the Tern browser split for the active interactive omp session. |
+| `omp/src/tern-server.ts` | Serves the session-scoped page and pushes changed decision snapshots over an event stream. |
+| `omp/src/tern-replies.ts` | Projects decision rows and commits a reviewed selection as one omp delivery. |
+| `omp/ui/decisions.html` | Interactive decision form and per-question drafts for the Tern split. |

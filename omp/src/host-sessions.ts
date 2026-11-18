@@ -105,7 +105,10 @@ export function sessionCalls(context: HostContext) {
 
       return changed
     })
-    if (isChanged) notifyChanged(id)
+    if (isChanged) {
+      context.saved?.(id, saved)
+      notifyChanged(id)
+    }
 
     return saved
   }

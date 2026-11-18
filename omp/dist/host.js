@@ -2,7 +2,7 @@
 // Built by omp/build.ts with Bun 1.4.4 from omp/src and hooks/. Do not edit.
 
 // src/host.ts
-import { randomUUID } from "crypto";
+import { randomUUID as randomUUID2 } from "crypto";
 
 // ../hooks/gh.ts
 var CANDIDATES = ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"];
@@ -413,6 +413,7 @@ var CLIENTS = {
       },
       "herdr-sidebar": { kind: "full" },
       "herdr-look": { kind: "full" },
+      "tern-decisions": { kind: "unsupported", reason: "Requires omp in Tern." },
       "herdr-open": { kind: "full" },
       "herdr-install": { kind: "full" },
       "status-children": { kind: "full" },
@@ -533,6 +534,7 @@ var CLIENTS = {
         kind: "different",
         reason: "Codex runs no hook when a session ends, so its published file stays."
       },
+      "tern-decisions": { kind: "unsupported", reason: "Requires omp in Tern." },
       "herdr-open": {
         kind: "unsupported",
         reason: "The Codex CLI has no action that opens the inbox. A Codex plugin adds skills, MCP servers and hooks but no slash command, and the Inbox tab shows only in the Codex app. A `$inbox` skill that has the model call an MCP tool could open the Herdr look, but only after a model turn, so the press could not show what it did at once. It is left as an option."
@@ -656,6 +658,7 @@ var CLIENTS = {
       },
       "herdr-sidebar": { kind: "full" },
       "herdr-look": { kind: "full" },
+      "tern-decisions": { kind: "full" },
       "herdr-open": { kind: "full" },
       "herdr-install": { kind: "full" },
       "status-children": {
@@ -8006,6 +8009,29 @@ async function rerunRun(host, e) {
 `)[0] || `gh exited with ${r.exitCode}`;
 }
 
+// src/commands.ts
+import { constants } from "fs";
+import { access, stat } from "fs/promises";
+function openTarget2(run, target, root, home) {
+  return openTarget(run, {
+    stat: (path) => stat(path).catch(() => null),
+    isExecutable: (path) => access(path, constants.X_OK).then(() => true, () => false)
+  }, target, root, home);
+}
+async function copyToClipboard(text) {
+  const candidates = process.platform === "darwin" ? [["pbcopy"]] : process.platform === "win32" ? [["clip"]] : [["wl-copy"], ["xclip", "-selection", "clipboard"]];
+  for (const argv of candidates) {
+    try {
+      const child = Bun.spawn(argv, { stdin: Buffer.from(text), stdout: "ignore", stderr: "ignore" });
+      if (await child.exited === 0)
+        return null;
+    } catch {
+      continue;
+    }
+  }
+  return `no clipboard command started (${candidates.map((c) => c[0]).join(", ")})`;
+}
+
 // src/panel-text.ts
 var ANSI = /\x1b\[[0-9;]*m/g;
 var visibleLength = (s) => cellWidth(s.replace(ANSI, ""));
@@ -10671,7 +10697,7 @@ async function runSends(host, effects, rowId, rows, at) {
 }
 
 // src/state.ts
-import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "fs/promises";
+import { mkdir, readdir, readFile, rename, stat as stat2, unlink, writeFile } from "fs/promises";
 import { join } from "path";
 
 // ../hooks/question-history.ts
@@ -12073,7 +12099,7 @@ async function pruneSessions(dir, keep) {
   const readable = await Promise.all(names.map(async (name) => {
     const path = join(folder, name);
     try {
-      const { mtimeMs } = await stat(path);
+      const { mtimeMs } = await stat2(path);
       upgraded(JSON.parse(await readFile(path, "utf8")), name.slice(0, -".json".length));
       return { name, path, mtimeMs };
     } catch {
@@ -12084,7 +12110,7 @@ async function pruneSessions(dir, keep) {
     if (updateTails.has(path) || exclusiveRuns.isHeld(path))
       continue;
     try {
-      if ((await stat(path)).mtimeMs === mtimeMs)
+      if ((await stat2(path)).mtimeMs === mtimeMs)
         await unlink(path);
     } catch {
       continue;
@@ -12250,13 +12276,13 @@ function styleOf(theme) {
 }
 
 // src/question-history.ts
-import { mkdir as mkdir2, readdir as readdir2, readFile as readFile2, rename as rename2, stat as stat2, writeFile as writeFile2 } from "fs/promises";
+import { mkdir as mkdir2, readdir as readdir2, readFile as readFile2, rename as rename2, stat as stat3, writeFile as writeFile2 } from "fs/promises";
 import { dirname, join as join2 } from "path";
 var nodeFs = {
   list: async (folder) => {
     const names = await readdir2(folder).catch(() => []);
     const listed = await Promise.all(names.map(async (name) => {
-      const info = await stat2(join2(folder, name)).catch(() => null);
+      const info = await stat3(join2(folder, name)).catch(() => null);
       return info?.isFile() ? { name, mtimeMs: info.mtimeMs } : null;
     }));
     return listed.filter((x) => x !== null);
@@ -12285,6 +12311,780 @@ function questionHistoryPlace(env, dir) {
         return session ? { id, session } : null;
       }));
       return read.filter((x) => x !== null);
+    }
+  };
+}
+
+// src/host-context.ts
+function isUnattended(ctx) {
+  const agent = ctx.agent;
+  return agent?.kind === "sub" || !ctx.hasUI;
+}
+var sessionIdOf = (ctx) => ctx.sessionManager.getSessionId();
+
+// src/tern-replies.ts
+import { createHash } from "crypto";
+function revision(item, last) {
+  const sent = last?.delivery?.state === "failed" ? null : last?.at;
+  return createHash("sha256").update(JSON.stringify([item, sent ?? null])).digest("hex");
+}
+function decisionView(s) {
+  return {
+    questions: s.ledger.items.filter((i) => i.kind === "question").map((i) => ({
+      id: i.id,
+      ask: i.ask,
+      options: i.options,
+      rec: i.rec,
+      reason: i.recReason,
+      context: i.context,
+      descriptions: i.optionDescriptions,
+      revision: revision(i, s.lastActions[i.id])
+    })),
+    focus: s.ledger.overview?.head?.title,
+    tasks: s.ledger.items.filter((i) => i.kind === "task").map((i) => i.ask),
+    findings: s.ledger.findings.map((f) => f.title),
+    prs: s.ledger.prs,
+    stale: s.presence.ledgerState !== "current"
+  };
+}
+function isReply(value) {
+  if (!value || typeof value !== "object")
+    return false;
+  const r = value;
+  return typeof r.id === "string" && typeof r.revision === "string" && (r.kind === "choice" || r.kind === "text") && typeof r.value === "string" && !!r.value.trim() && r.value.length <= 16000;
+}
+async function sendReplies(host, input) {
+  if (!Array.isArray(input) || !input.length || input.length > 128 || !input.every(isReply) || new Set(input.map((r) => r.id)).size !== input.length)
+    throw new Error("Choose a reply for each selected question.");
+  const replies = input;
+  const deliveryId = host.newId();
+  const saved = await host.update(async (s) => {
+    const at = await host.now();
+    let ledger = s.ledger;
+    const lastActions = { ...s.lastActions };
+    const parts = [];
+    for (const r of replies) {
+      const item = ledger.items.find((i) => i.id === r.id && i.kind === "question");
+      if (!item || revision(item, lastActions[r.id]) !== r.revision)
+        throw new Error("A question changed. Review your selections and send again.");
+      const press = r.kind === "choice" ? { action: "answer", id: r.id, option: r.value } : { action: "type", id: r.id, text: r.value };
+      const result = applyPress(ledger, lastActions[r.id], press, {
+        now: at,
+        turnsStarted: s.presence.turnsStarted,
+        holdMs: 0,
+        extraSteps: [],
+        comparePage: host.comparePage,
+        compareInBackground: host.compareInBackground,
+        answerMessage: host.answerMessage
+      });
+      if ("stale" in result || !result.last)
+        throw new Error("This reply is no longer available.");
+      const held = result.last.delivery;
+      const send = result.effects.find((e) => e.kind === "send");
+      const words = held?.state === "held" ? held.message : send?.text;
+      if (!words)
+        throw new Error("This reply is no longer available.");
+      parts.push(words);
+      lastActions[r.id] = result.last;
+      ledger = result.ledger;
+    }
+    const text = parts.join(`
+
+`);
+    for (const { id } of replies)
+      lastActions[id] = { ...lastActions[id], delivery: { state: "unconfirmed", message: text, id: deliveryId } };
+    const first = replies[0];
+    return {
+      ...s,
+      ledger,
+      lastActions,
+      sent: [
+        ...s.sent,
+        {
+          text,
+          press: replies.length === 1 && first.kind === "choice" ? { id: first.id, action: "answer" } : null,
+          at,
+          row: first.id,
+          queuedId: null,
+          pressedAt: at,
+          deliveryId,
+          phase: "attempting"
+        }
+      ]
+    };
+  });
+  const attempt = saved.sent.find((m) => m.deliveryId === deliveryId);
+  const at = attempt.at;
+  const outcome = await host.deliver(saved, attempt.text, deliveryId).catch((e) => ({ state: "unconfirmed", reason: String(e) }));
+  await host.update((s) => {
+    const next = completedAttempt(s, deliveryId, outcome);
+    if (outcome.state !== "rejected")
+      return next;
+    const lastActions = withFailure(next.lastActions, replies.map((r) => r.id), at, outcome.reason, deliveryId);
+    let ledger = next.ledger;
+    for (const { id } of replies) {
+      const action = lastActions[id];
+      if (action?.delivery?.state === "failed" && action.delivery.id === deliveryId && action.kind === "mark")
+        ledger = reopenOnFailure(ledger, id, at);
+    }
+    return { ...next, lastActions, ledger };
+  });
+  if (outcome.state === "rejected")
+    throw new Error(outcome.reason);
+  if (outcome.state === "unconfirmed")
+    throw new Error("Delivery unconfirmed. Check the conversation before retrying.");
+}
+
+// src/tern-server.ts
+import { randomUUID } from "crypto";
+
+// ui/decisions.html
+var decisions_default = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Inbox \xB7 omp</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #faf9f6;
+        --fg: #212622;
+        --soft: #646c65;
+        --line: #d2d6ce;
+        --card: #fff;
+        --accent: #216449;
+        --wash: #edf4ef;
+        font:
+          15px/1.45 'Instrument Sans',
+          ui-sans-serif,
+          system-ui,
+          sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #191d1b;
+          --fg: #ebefe9;
+          --soft: #a2aca4;
+          --card: #232925;
+          --line: #424c45;
+          --accent: #a2dcc0;
+          --wash: #273c30;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      main,
+      footer > div {
+        max-width: 48rem;
+        margin: auto;
+        padding: 1.3rem;
+      }
+      main {
+        width: 100%;
+        padding-bottom: 2rem;
+      }
+      header {
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 0.85rem;
+      }
+      h1 {
+        font:
+          600 clamp(1.65rem, 6vw, 2.25rem)/1.15 Georgia,
+          serif;
+        margin: 0;
+      }
+      h2 {
+        font-weight: 600;
+        font-size: 1.05rem;
+        line-height: 1.4;
+        margin: 0;
+      }
+      p {
+        margin: 0.35rem 0;
+        color: var(--soft);
+      }
+      #focus:empty,
+      #notice:empty {
+        display: none;
+      }
+      article {
+        margin: 1.2rem 0;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 1rem;
+      }
+      fieldset {
+        padding: 0;
+        margin: 0.7rem 0;
+        border: 0;
+        min-width: 0;
+      }
+      .choice {
+        display: flex;
+        gap: 0.5rem;
+        align-items: baseline;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        padding: 0.55rem 0.65rem;
+        margin: 0.35rem 0;
+        cursor: pointer;
+      }
+      .choice:has(:checked) {
+        background: var(--wash);
+        border-color: var(--accent);
+      }
+      input {
+        accent-color: var(--accent);
+      }
+      small {
+        display: block;
+        color: var(--soft);
+      }
+      em {
+        font-style: normal;
+        font-weight: 600;
+        color: var(--accent);
+        font-size: 0.76rem;
+        margin-left: 0.45rem;
+      }
+      textarea {
+        width: 100%;
+        resize: vertical;
+        min-height: 2.45rem;
+        background: var(--card);
+        color: inherit;
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        padding: 0.5rem;
+        font: inherit;
+        display: block;
+        margin: 0.45rem 0;
+      }
+      button {
+        font: inherit;
+        color: var(--accent);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 0.4rem;
+        padding: 0.38rem 0.7rem;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.48;
+        cursor: default;
+      }
+      button.primary {
+        color: var(--bg);
+        border-color: var(--accent);
+        background: var(--accent);
+        font-weight: 600;
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+      details {
+        color: var(--soft);
+      }
+      summary {
+        cursor: pointer;
+      }
+      li {
+        margin: 0.3rem 0;
+      }
+      footer {
+        margin-top: auto;
+        position: sticky;
+        bottom: 0;
+        background: var(--bg);
+        border-top: 1px solid var(--line);
+      }
+      footer > div {
+        padding-block: 0.7rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+      }
+      #notice {
+        font-size: 0.87rem;
+        flex-basis: 100%;
+      }
+      #count {
+        font-size: 0.85rem;
+        color: var(--soft);
+      }
+      #empty {
+        margin: 1.2rem 0;
+      }
+      body {
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Inbox</h1>
+        <p id="focus"></p>
+      </header>
+      <p id="empty" role="status">Connecting to omp\u2026</p>
+      <section id="questions" aria-label="Open questions"></section>
+      <details id="other">
+        <summary>Session details</summary>
+        <div id="context"></div>
+        <p>Open <code>/inbox full</code> in omp for all actions.</p>
+      </details>
+    </main>
+    <footer>
+      <div>
+        <span id="count">Connecting\u2026</span><button class="primary" id="batch" disabled>Send replies</button>
+        <p id="notice" role="status"></p>
+      </div>
+    </footer>
+    <script>
+      'use strict'
+      const byId = id => document.getElementById(id)
+      const el = (tag, text) => {
+        const node = document.createElement(tag)
+        if (text !== undefined) node.textContent = text
+        return node
+      }
+      let view = { questions: [] },
+        online = false,
+        sending = false
+      let drafts = {}
+      const storageKey = 'inbox:' + location.pathname
+      try {
+        drafts = JSON.parse(sessionStorage.getItem(storageKey)) || {}
+      } catch {}
+      function save() {
+        try {
+          sessionStorage.setItem(storageKey, JSON.stringify(drafts))
+        } catch {}
+      }
+      const cards = new Map()
+      function controls() {
+        const n = view.questions.filter(q => drafts[q.id]?.revision === q.revision && drafts[q.id].value.trim()).length
+        byId('count').textContent = !online
+          ? 'Disconnected \xB7 reconnecting\u2026'
+          : n
+            ? n + ' selected'
+            : 'No replies selected'
+        byId('batch').textContent = sending ? 'Sending\u2026' : n > 1 ? 'Send ' + n + ' together' : 'Send reply'
+        byId('batch').disabled = !online || sending || !n
+        for (const [id, card] of cards) {
+          card.one.disabled = !online || sending || drafts[id]?.revision !== card.revision || !drafts[id]?.value.trim()
+          card.clear.disabled = sending || !drafts[id]
+          card.fields.disabled = sending
+        }
+      }
+      function choose(q, kind, value) {
+        if (value) drafts[q.id] = { id: q.id, revision: q.revision, kind, value }
+        else delete drafts[q.id]
+        save()
+        controls()
+      }
+      function cardFor(q) {
+        const node = el('article'),
+          title = el('h2', q.ask)
+        node.append(title)
+        if (q.context) node.append(el('p', q.context))
+        const fields = el('fieldset')
+        fields.setAttribute('aria-label', q.ask)
+        node.append(fields)
+        const free = el('textarea')
+        free.rows = 1
+        free.maxLength = 16000
+        free.placeholder = 'Write a reply\u2026'
+        free.setAttribute('aria-label', 'Written reply to ' + q.ask)
+        const options = []
+        for (const opt of q.options) {
+          const label = el('label'),
+            radio = el('input'),
+            words = el('span', opt)
+          label.className = 'choice'
+          radio.type = 'radio'
+          radio.name = q.id
+          radio.checked = drafts[q.id]?.kind === 'choice' && drafts[q.id].value === opt
+          radio.onchange = () => {
+            free.value = ''
+            choose(q, 'choice', opt)
+          }
+          if (opt === q.rec) words.append(el('em', ' Recommended'))
+          if (q.descriptions?.[opt]) words.append(el('small', q.descriptions[opt]))
+          if (opt === q.rec && q.reason) words.append(el('small', q.reason))
+          label.append(radio, words)
+          fields.append(label)
+          options.push(radio)
+        }
+        free.value = drafts[q.id]?.kind === 'text' ? drafts[q.id].value : ''
+        free.oninput = () => {
+          for (const r of options) r.checked = false
+          choose(q, 'text', free.value)
+        }
+        fields.append(free)
+        const actions = el('div'),
+          one = el('button', 'Send this reply'),
+          clear = el('button', 'Clear')
+        actions.className = 'actions'
+        one.onclick = () => send([q.id])
+        clear.onclick = () => {
+          free.value = ''
+          for (const r of options) r.checked = false
+          choose(q, 'text', '')
+        }
+        actions.append(one, clear)
+        node.append(actions)
+        return { node, one, clear, fields, revision: q.revision }
+      }
+      function render(next) {
+        view = next
+        byId('focus').textContent = next.focus || ''
+        byId('empty').textContent = next.stale
+          ? 'The inbox is catching up. Questions may be out of date.'
+          : next.questions.length
+            ? ''
+            : 'No questions waiting.'
+        byId('empty').hidden = !byId('empty').textContent
+        const questions = byId('questions'),
+          ids = new Set(next.questions.map(q => q.id))
+        for (const [id, card] of cards)
+          if (!ids.has(id)) {
+            card.node.remove()
+            cards.delete(id)
+          }
+        // Keep in-progress typing and focus when another row changes.
+        let previous = null
+        for (const q of next.questions) {
+          let card = cards.get(q.id)
+          if (drafts[q.id] && drafts[q.id].revision !== q.revision && !sending) {
+            delete drafts[q.id]
+            card?.node.remove()
+            card = undefined
+            byId('notice').textContent = 'A question changed. Choose its reply again.'
+          }
+          if (!card || card.revision !== q.revision) {
+            card?.node.remove()
+            card = cardFor(q)
+            cards.set(q.id, card)
+          }
+          const position = previous ? previous.nextSibling : questions.firstChild
+          if (position !== card.node) questions.insertBefore(card.node, position)
+          previous = card.node
+        }
+        // Keep a removed row's draft until delivery is acknowledged. A rejected send can reopen it.
+        save()
+        const context = byId('context')
+        context.replaceChildren()
+        for (const [name, values] of [
+          ['Tasks', next.tasks],
+          ['Findings', next.findings],
+          ['Pull requests', next.prs],
+        ]) {
+          if (!values.length) continue
+          const list = el('ul')
+          for (const v of values) list.append(el('li', v))
+          context.append(el('h2', name), list)
+        }
+        controls()
+      }
+      async function send(ids) {
+        if (sending || !online) return
+        const replies = ids
+          .map(id => drafts[id])
+          .filter(r => r && r.value.trim() && view.questions.some(q => q.id === r.id && q.revision === r.revision))
+        if (!replies.length) return
+        sending = true
+        controls()
+        try {
+          const res = await fetch('send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(replies),
+          })
+          if (!res.ok) throw new Error((await res.text()) || 'omp could not accept the replies.')
+          for (const r of replies) {
+            delete drafts[r.id]
+            cards.get(r.id)?.node.remove()
+            cards.delete(r.id)
+          }
+          byId('notice').textContent =
+            replies.length === 1 ? 'Reply sent to omp.' : replies.length + ' replies sent in one message.'
+        } catch (e) {
+          byId('notice').textContent =
+            e instanceof TypeError ? 'Connection interrupted. Check the conversation before sending again.' : e.message
+        } finally {
+          sending = false
+          render(view)
+        }
+      }
+      byId('batch').onclick = () => send(view.questions.map(q => q.id))
+      const events = new EventSource('events')
+      events.onmessage = e => {
+        online = true
+        render(JSON.parse(e.data))
+      }
+      events.onerror = () => {
+        online = false
+        controls()
+      }
+    </script>
+  </body>
+</html>
+`;
+
+// src/tern-server.ts
+var page = String(decisions_default);
+function serveDecisions(readView, submit) {
+  const base = "/" + randomUUID() + "/";
+  const streams = new Set;
+  const headers = {
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+  };
+  let data = "";
+  const emit = () => "data: " + data + `
+
+`;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    maxRequestBodySize: 512 * 1024,
+    async fetch(req, server) {
+      const url = new URL(req.url);
+      if (url.origin !== server.url.origin || !url.pathname.startsWith(base))
+        return new Response(null, { status: 404 });
+      const route = url.pathname.slice(base.length);
+      if (!route && req.method === "GET")
+        return new Response(page, { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+      if (route === "events" && req.method === "GET") {
+        server.timeout(req, 0);
+        let client;
+        const stream = new ReadableStream({
+          start(c) {
+            client = c;
+            streams.add(c);
+            data = JSON.stringify(readView());
+            c.enqueue(emit());
+          },
+          cancel() {
+            streams.delete(client);
+          }
+        });
+        return new Response(stream, { headers: { ...headers, "content-type": "text/event-stream" } });
+      }
+      if (route !== "send" || req.method !== "POST")
+        return new Response(null, { status: 404 });
+      if (req.headers.get("origin") !== server.url.origin || req.headers.get("content-type") !== "application/json")
+        return new Response(null, { status: 403 });
+      try {
+        await submit(await req.json());
+        return new Response(null, { status: 204 });
+      } catch (error) {
+        return new Response(error instanceof Error ? error.message : "Could not send the replies.", {
+          status: 409,
+          headers
+        });
+      }
+    }
+  });
+  server.unref();
+  return {
+    url: new URL(base, server.url).href,
+    update() {
+      if (!streams.size)
+        return;
+      const next = JSON.stringify(readView());
+      if (next === data)
+        return;
+      data = next;
+      for (const c of streams) {
+        try {
+          c.enqueue(emit());
+        } catch {
+          streams.delete(c);
+        }
+      }
+    },
+    stop() {
+      for (const c of streams)
+        c.close();
+      streams.clear();
+      server.stop(true);
+    }
+  };
+}
+
+// src/tern-pane.ts
+function ternTarget(env) {
+  const id = env.TERN_PANE;
+  if (!env.TERN_PANE_SOCKET || !id || !/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || env.OMP_INBOX_TERN === "off")
+    return null;
+  return { owner: Number(id), auto: env.OMP_INBOX_TERN !== "manual" };
+}
+function ternPane(target, run, cwd, host, notify) {
+  let page;
+  let opening;
+  let stopped = false;
+  let tried = false;
+  let focusRequested = false;
+  let latest;
+  async function browser(op) {
+    const response = await run(["tern", "browser", JSON.stringify(op), "--timeout", "12"], { cwd, timeoutMs: 14000 });
+    if (response.code !== 0)
+      throw new Error("Tern could not open the inbox. Use /inbox full, or retry /inbox.");
+    const result = JSON.parse(response.stdout);
+    if (!result.ok)
+      throw new Error("Tern did not acknowledge the browser operation.");
+    return result.ok;
+  }
+  async function existing(url) {
+    const result = await browser({ op: "blocks" });
+    const blocks = result.blocks;
+    return blocks.find((b) => b.url === url)?.block;
+  }
+  async function focused() {
+    const reply = await run(["tern", "ls", "--json"], { cwd, timeoutMs: 5000 });
+    if (reply.code !== 0)
+      return;
+    const layout = JSON.parse(reply.stdout);
+    return layout.sessions.find((s) => s.shown)?.tabs.find((t) => t.shown)?.blocks.find((b) => b.focused)?.id;
+  }
+  async function launch() {
+    const state = latest ?? await host.read();
+    if (stopped)
+      return;
+    page ??= serveDecisions(() => decisionView(latest ?? state), (replies) => {
+      if (stopped)
+        throw new Error("This omp session has ended.");
+      return sendReplies(host, replies);
+    });
+    const { url } = page;
+    const found = await existing(url);
+    if (stopped)
+      return;
+    if (found !== undefined) {
+      const result = await run(["tern", "focus", String(found)], { cwd, timeoutMs: 5000 });
+      if (result.code !== 0)
+        throw new Error("Tern could not focus the inbox. Retry /inbox.");
+      return;
+    }
+    const previous = focusRequested ? undefined : await focused().catch(() => {
+      return;
+    });
+    if (stopped)
+      return;
+    const { block } = await browser({ op: "open", owner: target.owner, url, how: "beside" });
+    if (typeof block !== "number")
+      throw new Error("Tern did not return an inbox block.");
+    if (stopped)
+      await browser({ op: "close", block });
+    else {
+      await browser({ op: "release", block });
+      if (previous === undefined || focusRequested || stopped)
+        return;
+      const current = await focused().catch(() => {
+        return;
+      });
+      if (current === block && !focusRequested && !stopped)
+        await run(["tern", "focus", String(previous)], { cwd, timeoutMs: 5000 });
+    }
+  }
+  function open(focus = true) {
+    tried = true;
+    if (!opening || focus)
+      focusRequested = focus;
+    opening ??= launch().finally(() => {
+      opening = undefined;
+    });
+    return opening;
+  }
+  return {
+    open,
+    saved(state) {
+      if (stopped)
+        return;
+      latest = state;
+      page?.update();
+      if (target.auto && !tried && state.ledger.items.some((i) => i.kind === "question"))
+        open(false).catch((err) => {
+          if (!stopped)
+            notify(String(err instanceof Error ? err.message : err));
+        });
+    },
+    stop() {
+      stopped = true;
+      if (!page)
+        return;
+      const { url } = page;
+      page.stop();
+      return existing(url).then((block) => block === undefined ? undefined : browser({ op: "close", block })).catch(() => {});
+    }
+  };
+}
+function ternSessions(target, run, sessions) {
+  let active;
+  return {
+    start(ctx) {
+      if (!target || isUnattended(ctx) || ctx.mode !== "tui")
+        return;
+      const id = sessionIdOf(ctx);
+      if (active?.id === id)
+        return;
+      active?.panel.stop();
+      const host = sessions.hostFor(ctx);
+      const panel = ternPane(target, run, ctx.cwd, {
+        ...host,
+        deliver: (s, text, key) => active?.panel === panel && sessionIdOf(ctx) === id ? host.deliver(s, text, key) : Promise.resolve({ state: "rejected", reason: "The omp session changed." })
+      }, (message) => ctx.ui.notify(message, "warning"));
+      active = { id, panel, sawSave: false };
+      host.read().then((state) => {
+        if (active?.panel === panel && !active.sawSave)
+          panel.saved(state);
+      }).catch(() => {});
+    },
+    saved(id, state) {
+      if (active?.id !== id)
+        return;
+      active.sawSave = true;
+      active.panel.saved(state);
+    },
+    async open(ctx) {
+      if (ctx.mode !== "tui" || active?.id !== sessionIdOf(ctx))
+        return false;
+      try {
+        await active.panel.open();
+        return true;
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
+        return false;
+      }
+    },
+    stop(ctx) {
+      if (isUnattended(ctx) || active?.id !== sessionIdOf(ctx))
+        return;
+      const closing = active.panel.stop();
+      active = undefined;
+      return closing;
     }
   };
 }
@@ -12871,13 +13671,6 @@ function isDismissedAsk(message) {
   return m?.role === "toolResult" && m.toolName === "ask" && Array.isArray(m.content) && askOutcome({ content: m.content, isError: m.isError === true, details: m.details })?.kind === "dismissed";
 }
 
-// src/host-context.ts
-function isUnattended(ctx) {
-  const agent = ctx.agent;
-  return agent?.kind === "sub" || !ctx.hasUI;
-}
-var sessionIdOf = (ctx) => ctx.sessionManager.getSessionId();
-
 // src/omp-messages.ts
 function textOfBlocks(content) {
   if (!Array.isArray(content))
@@ -13066,7 +13859,7 @@ function activityHandlers(context, sessions) {
 
 // src/host-presses.ts
 import { watch } from "fs";
-import { appendFile, lstat, mkdir as mkdir3, readdir as readdir3, readFile as readFile3, rename as rename3, rm, stat as stat3, writeFile as writeFile3 } from "fs/promises";
+import { appendFile, lstat, mkdir as mkdir3, readdir as readdir3, readFile as readFile3, rename as rename3, rm, stat as stat4, writeFile as writeFile3 } from "fs/promises";
 import { dirname as dirname2, join as join3 } from "path";
 import { fileURLToPath } from "url";
 
@@ -13797,7 +14590,7 @@ var HERDR_LOG_BYTES = 64 * 1024;
 function herdrLog(dir) {
   const path = join3(dir, "herdr.log");
   return (text) => void (async () => {
-    const size = await stat3(path).then((s) => s.size, () => 0);
+    const size = await stat4(path).then((s) => s.size, () => 0);
     const line = `${new Date().toISOString()} ${text}
 `;
     await mkdir3(dir, { recursive: true });
@@ -13809,7 +14602,7 @@ function herdrLog(dir) {
 var pressFiles = {
   list: (folder) => readdir3(folder),
   read: async (path) => {
-    const problem = pressFileProblem(await stat3(path));
+    const problem = pressFileProblem(await stat4(path));
     if (problem)
       throw new Error(problem);
     return readFile3(path, "utf8");
@@ -14078,16 +14871,6 @@ function flattenConversation(turns) {
   return kept.reverse().join(NL7);
 }
 
-// src/commands.ts
-import { constants } from "fs";
-import { access, stat as stat4 } from "fs/promises";
-function openTarget2(run, target, root, home) {
-  return openTarget(run, {
-    stat: (path) => stat4(path).catch(() => null),
-    isExecutable: (path) => access(path, constants.X_OK).then(() => true, () => false)
-  }, target, root, home);
-}
-
 // src/host-sessions.ts
 var WAKE_MARGIN_MS = 250;
 function sessionIdInFile(file) {
@@ -14141,8 +14924,10 @@ function sessionCalls(context) {
       isChanged = changed !== current;
       return changed;
     });
-    if (isChanged)
+    if (isChanged) {
+      context.saved?.(id, saved);
       notifyChanged(id);
+    }
     return saved;
   };
   const gh = ghFinder(run);
@@ -14526,23 +15311,10 @@ async function isUsageLimitOutcome(status, message) {
   const ai = await import("@oh-my-pi/pi-ai");
   return ai.isUsageLimitOutcome(status, message);
 }
-async function copyToClipboard(text) {
-  const candidates = process.platform === "darwin" ? [["pbcopy"]] : process.platform === "win32" ? [["clip"]] : [["wl-copy"], ["xclip", "-selection", "clipboard"]];
-  for (const argv of candidates) {
-    try {
-      const child = Bun.spawn(argv, { stdin: Buffer.from(text), stdout: "ignore", stderr: "ignore" });
-      if (await child.exited === 0)
-        return null;
-    } catch {
-      continue;
-    }
-  }
-  return `no clipboard command started (${candidates.map((c) => c[0]).join(", ")})`;
-}
 var defaultDeps = {
   stateDir: (pi) => join5(pi.pi.getAgentDir(), "inbox"),
   now: Date.now,
-  newId: randomUUID,
+  newId: randomUUID2,
   settleWindowMs: SETTLED_MS,
   home: homedir(),
   isNextBuild: existsSync(join5(dirname4(dirname4(fileURLToPath2(import.meta.url))), NEXT_BUILD_MARK)),
@@ -14555,6 +15327,7 @@ var defaultDeps = {
   after: (ms, fn) => void setTimeout(fn, ms).unref(),
   isUsageLimit: isUsageLimitOutcome,
   herdrTarget: herdrTarget(process.env),
+  tern: ternTarget(process.env),
   questionHistory: (dir) => questionHistoryPlace(process.env, dir)
 };
 var messageOf = (err) => err instanceof Error ? err.message : String(err);
@@ -14689,7 +15462,12 @@ function createInbox(pi, deps = defaultDeps) {
   const sessions = sessionCalls(context);
   const { change } = sessions;
   const turns = turnHandlers(context, sessions);
-  const { start } = turns;
+  const tern = ternSessions(deps.tern, run, sessions);
+  context.saved = tern.saved;
+  const start = (ctx, parentFile) => {
+    tern.start(ctx);
+    return turns.start(ctx, parentFile);
+  };
   const activity = activityHandlers(context, sessions);
   const herdrAsk = ompHerdrAsk(deps.herdrTarget, context.memory, () => {
     for (const listeners of context.listeners.values())
@@ -14710,7 +15488,9 @@ function createInbox(pi, deps = defaultDeps) {
   });
   pi.on("session_switch", (event, ctx) => start(ctx, event.reason === "fork" ? event.previousSessionFile : undefined));
   pi.on("session_branch", (event, ctx) => start(ctx, event.previousSessionFile));
-  pi.on("session_shutdown", turns.onSessionShutdown);
+  pi.on("session_shutdown", async (event, ctx) => {
+    await Promise.all([tern.stop(ctx), turns.onSessionShutdown(event, ctx)]);
+  });
   pi.on("before_agent_start", turns.onBeforeAgentStart);
   pi.on("input", turns.onInput);
   pi.on("agent_start", (event, ctx) => {
@@ -14840,6 +15620,8 @@ function createInbox(pi, deps = defaultDeps) {
           await openPanelUi(ctx, false);
         return;
       }
+      if (!args.trim() && await tern.open(ctx))
+        return;
       const isDemo = args.trim() === "demo";
       const target = deps.herdrTarget;
       const isHerdrApp = ctx.mode === "tui" && !args.trim() && target?.kind === "terminal";
